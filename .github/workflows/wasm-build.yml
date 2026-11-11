@@ -36,10 +36,19 @@ jobs:
       - name: Build WebAssembly
         run: cmake --build build-wasm
 
-      - name: Upload WebAssembly artifacts
+
+      - name: Assemble website
+        run: |
+          cp -R web/. build-wasm/web/
+          test -f build-wasm/web/index.html
+          test -f build-wasm/web/loan_calculator.js
+          test -f build-wasm/web/loan_calculator.wasm
+
+      - name: Upload website artifact
         uses: actions/upload-artifact@v4
         with:
-          name: loan-calculator-wasm
+          name: loan-calculator-website
           path: build-wasm/web/
           if-no-files-found: error
           retention-days: 7
+
