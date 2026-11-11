@@ -1,0 +1,37 @@
+
+name: WebAssembly Build
+
+on:
+  push:
+    branches:
+      - feature/web-loan-simulator
+      - develop
+  pull_request:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-wasm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Verify Emscripten
+        run: emcc --version
+
+      - name: Configure WebAssembly build
+        run: |
+          emcmake cmake -S . -B build-wasm -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build WebAssembly
+        run: cmake --build build-wasm
