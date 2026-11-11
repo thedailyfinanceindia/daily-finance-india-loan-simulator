@@ -1,0 +1,100 @@
+
+name: Build and Deploy Loan Calculator
+
+on:
+  push:
+    branches:
+      - feature/web-loan-simulator
+      - develop
+      - main
+
+  pull_request:
+    branches:
+      - develop
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build and Test WebAssembly
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Verify Emscripten
+        run: emcc --version
+
+      - name: Configure WebAssembly build
+        run: |
+          emcmake cmake -S . -B build-wasm -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF
+
+      - name: Build WebAssembly
+        run: cmake --build build-wasm
+
+      - name: Assemble website
+        run: |
+          cp -R web/. build-wasm/web/
+          test -f build-wasm/web/index.html
+          test -f build-wasm/web/styles.css
+          test -f build-wasm/web/app.js
+          test -f build-wasm/web/loan_calculator.js
+          test -f build-wasm/web/loan_calculator.wasm
+
+      - name: Set up Node.js for browser tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Playwright
+        run: npm install --no-save playwright
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: node tests/browser/loan-calculator.browser.test.cjs
+
+      - name: Upload website artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: loan-calculator-website
+          path: build-wasm/web/
+          retention-days: 7
+
+      - name: Configure GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build-wasm/web/
+
+  deploy:
+    name: Deploy Production Website
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
