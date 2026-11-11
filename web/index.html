@@ -1,0 +1,85 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Calculate your home loan EMI, total interest and repayment with Daily Finance India.">
+    <title>Home Loan EMI Calculator | Daily Finance India</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./loan_calculator.js"></script>
+    <script defer src="./app.js"></script>
+</head>
+<body>
+    <header class="site-header">
+        <a class="brand" href="./">Daily Finance India</a>
+        <span class="brand-tagline">Money. Rights. Systems. Explained.</span>
+    </header>
+
+    <main class="container">
+        <section class="intro">
+            <p class="eyebrow">FREE FINANCIAL CALCULATOR</p>
+            <h1>Home Loan EMI Calculator</h1>
+            <p>Understand your monthly EMI, total interest and total repayment before taking a home loan.</p>
+        </section>
+
+        <section class="calculator">
+            <form id="loan-form" novalidate>
+                <div class="field">
+                    <label for="principal">Loan amount (₹)</label>
+                    <input id="principal" type="number" min="1" max="1000000000"
+                           value="5000000" step="10000" required>
+                </div>
+
+                <div class="field">
+                    <label for="interest-rate">Annual interest rate (%)</label>
+                    <input id="interest-rate" type="number" min="0" max="100"
+                           value="8.5" step="0.05" required>
+                </div>
+
+                <div class="field">
+                    <label for="tenure">Loan tenure (years)</label>
+                    <input id="tenure" type="number" min="1" max="50"
+                           value="20" step="1" required>
+                </div>
+
+                <button id="calculate-button" type="submit">
+                    Calculate EMI
+                </button>
+
+                <p id="error-message" class="error" role="alert"></p>
+            </form>
+
+            <div id="results" class="results" aria-live="polite" hidden>
+                <p class="result-label">Your monthly EMI</p>
+                <p id="monthly-emi" class="emi-value">—</p>
+
+                <div class="result-row">
+                    <span>Principal amount</span>
+                    <strong id="principal-result">—</strong>
+                </div>
+
+                <div class="result-row">
+                    <span>Total interest</span>
+                    <strong id="interest-result">—</strong>
+                </div>
+
+                <div class="result-row total">
+                    <span>Total repayment</span>
+                    <strong id="repayment-result">—</strong>
+                </div>
+            </div>
+        </section>
+
+        <section class="disclaimer">
+            <strong>Important:</strong> This calculator provides estimates based on
+            the entered interest rate and tenure. Actual lender calculations may
+            differ due to rate changes, fees, disbursement schedules and other terms.
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        © Daily Finance India
+    </footer>
+</body>
+</html>
