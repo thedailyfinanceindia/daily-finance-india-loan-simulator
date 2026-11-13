@@ -2,3 +2,5 @@ name = "dfi-instagram-webhook-dev"
 main = "worker/index.js"
 compatibility_date = "2026-11-13"
 workers_dev = true
+
+# The Wasm module is imported directly by worker/index.js.
