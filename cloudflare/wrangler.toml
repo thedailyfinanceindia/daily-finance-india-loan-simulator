@@ -4,3 +4,8 @@ compatibility_date = "2026-11-13"
 workers_dev = true
 
 # The Wasm module is imported directly by worker/index.js.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dfi-instagram-conversations-dev"
+database_id = "8f543a30-1463-4218-aacc-753cc320eec9"
