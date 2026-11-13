@@ -15,7 +15,7 @@ async function main() {
         );
     }
 
-    const { instance } = await WebAssembly.instantiate(module, {});
+    const instance = await WebAssembly.instantiate(module, {});
     const exports = instance.exports;
 
     assert.equal(typeof exports.dfi_calculate_loan, "function");
