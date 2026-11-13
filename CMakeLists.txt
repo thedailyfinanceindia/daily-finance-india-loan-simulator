@@ -1,5 +1,5 @@
-
 cmake_minimum_required(VERSION 3.25)
+
 project(DailyFinanceIndiaLoanSimulator VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -29,26 +29,49 @@ endif()
 include(CTest)
 
 if(BUILD_TESTING AND NOT EMSCRIPTEN)
-    add_executable(dfi_tests tests/loan_calculator_tests.cpp)
-    target_link_libraries(dfi_tests PRIVATE dfi_loan_engine)
-    add_test(NAME LoanCalculatorTests COMMAND dfi_tests)
+    add_executable(dfi_tests
+        tests/loan_calculator_tests.cpp
+    )
 
-    add_executable(dfi_comparison_tests tests/loan_comparison_tests.cpp)
+    target_link_libraries(dfi_tests PRIVATE dfi_loan_engine)
+
+    add_test(
+        NAME LoanCalculatorTests
+        COMMAND dfi_tests
+    )
+
+    add_executable(dfi_comparison_tests
+        tests/loan_comparison_tests.cpp
+    )
+
     target_link_libraries(dfi_comparison_tests PRIVATE dfi_loan_engine)
-    add_test(NAME LoanComparisonTests COMMAND dfi_comparison_tests)
+
+    add_test(
+        NAME LoanComparisonTests
+        COMMAND dfi_comparison_tests
+    )
 endif()
 
-# WebAssembly browser module
+# WebAssembly targets
 if(EMSCRIPTEN)
+
+    # --------------------------------------------------
+    # Browser WebAssembly module
+    # Existing website target - preserve its behavior
+    # --------------------------------------------------
+
     add_executable(dfi_loan_wasm
         src/wasm/loan_wasm.cpp
     )
 
-    target_link_libraries(dfi_loan_wasm PRIVATE dfi_loan_engine)
+    target_link_libraries(dfi_loan_wasm
+        PRIVATE dfi_loan_engine
+    )
 
     set_target_properties(dfi_loan_wasm PROPERTIES
         OUTPUT_NAME "loan_calculator"
         SUFFIX ".js"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web"
     )
 
     target_link_options(dfi_loan_wasm PRIVATE
@@ -59,7 +82,44 @@ if(EMSCRIPTEN)
         "-sENVIRONMENT=web"
     )
 
-    set_target_properties(dfi_loan_wasm PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web"
+
+    # --------------------------------------------------
+    # Cloudflare Workers WebAssembly module
+    # New target - independent from browser module
+    # --------------------------------------------------
+
+    add_executable(dfi_loan_worker_wasm
+        src/wasm/loan_worker.cpp
     )
+
+    target_link_libraries(dfi_loan_worker_wasm
+        PRIVATE dfi_loan_engine
+    )
+
+    # Use native WebAssembly exception handling.
+    # Apply it to the engine because it contains C++ throw statements.
+    target_compile_options(dfi_loan_engine
+        PRIVATE -fwasm-exceptions
+    )
+
+    target_compile_options(dfi_loan_worker_wasm
+        PRIVATE -fwasm-exceptions
+    )
+
+    set_target_properties(dfi_loan_worker_wasm PROPERTIES
+        OUTPUT_NAME "loan_worker"
+        SUFFIX ".wasm"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/worker"
+    )
+
+    target_link_options(dfi_loan_worker_wasm PRIVATE
+        "-fwasm-exceptions"
+        "-sSTANDALONE_WASM=1"
+        "-sFILESYSTEM=0"
+        "-sINITIAL_MEMORY=16777216"
+        "-sALLOW_MEMORY_GROWTH=0"
+        "-sEXPORTED_FUNCTIONS=['_dfi_calculate_loan','_dfi_get_result_ptr']"
+        "-Wl,--no-entry"
+    )
+
 endif()
