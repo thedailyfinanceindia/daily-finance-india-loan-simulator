@@ -62,4 +62,33 @@ if(EMSCRIPTEN)
     set_target_properties(dfi_loan_wasm PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web"
     )
+    
+    # Cloudflare Workers WebAssembly module
+    add_executable(dfi_loan_worker_wasm
+        src/wasm/loan_worker.cpp
+    )
+
+    target_link_libraries(dfi_loan_worker_wasm
+        PRIVATE dfi_loan_engine
+    )
+
+    target_compile_options(dfi_loan_worker_wasm
+        PRIVATE -fexceptions
+    )
+
+    set_target_properties(dfi_loan_worker_wasm PROPERTIES
+        OUTPUT_NAME "loan_worker"
+        SUFFIX ".wasm"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/worker"
+    )
+
+    target_link_options(dfi_loan_worker_wasm PRIVATE
+        "-fexceptions"
+        "-sSTANDALONE_WASM=1"
+        "-sFILESYSTEM=0"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "-sEXPORTED_FUNCTIONS=['_dfi_calculate_loan','_dfi_get_result_ptr']"
+        "-Wl,--no-entry"
+    )
+
 endif()
