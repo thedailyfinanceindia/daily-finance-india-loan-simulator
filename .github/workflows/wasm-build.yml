@@ -52,12 +52,16 @@ jobs:
           test -f build-wasm/web/app.js
           test -f build-wasm/web/loan_calculator.js
           test -f build-wasm/web/loan_calculator.wasm
-
+          test -f build-wasm/worker/loan_worker.wasm
+          
       - name: Set up Node.js for browser tests
         uses: actions/setup-node@v4
         with:
           node-version: 22
-
+          
+      - name: Run Worker WebAssembly tests
+        run: node tests/wasm/loan_worker.test.cjs
+        
       - name: Install Playwright
         run: npm install --no-save playwright
 
@@ -83,7 +87,14 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: build-wasm/web/
-
+          
+      - name: Upload Worker Wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dfi-instagram-worker-wasm
+          path: build-wasm/worker/loan_worker.wasm
+          retention-days: 7
+          
   deploy:
     name: Deploy Production Website
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
