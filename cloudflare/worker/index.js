@@ -1,3 +1,4 @@
+
 import loanWasmModule from "./loan_worker.wasm";
 
 // --------------------------------------------------
@@ -7,13 +8,12 @@ import loanWasmModule from "./loan_worker.wasm";
 const GRAPH_API_VERSION = "v27.0";
 const INSTAGRAM_ACCOUNT_ID = "17841427456411892";
 
-const MAX_PRINCIPAL = 1_000_000_000; // ₹100 crore
+const MAX_PRINCIPAL = 1_000_000_000;
 const MAX_ANNUAL_RATE = 100;
 const MAX_TENURE_MONTHS = 600;
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 
-// Temporary webhook deduplication cache.
-// This is still isolate-local; move to D1 before production.
+// Temporary isolate-local duplicate detection.
 const processedMessageIds = new Map();
 
 // --------------------------------------------------
@@ -230,7 +230,7 @@ async function sendInstagramText(env, recipientId, text) {
 }
 
 // --------------------------------------------------
-// Conversation state machine
+// Conversation states
 // --------------------------------------------------
 
 const STATE = {
@@ -280,8 +280,6 @@ async function getConversation(env, senderId) {
 }
 
 async function saveConversation(env, senderId, conversation) {
-    const now = Date.now();
-
     await env.DB.prepare(`
         INSERT INTO conversations (
             sender_id,
@@ -306,7 +304,7 @@ async function saveConversation(env, senderId, conversation) {
             conversation.principal,
             conversation.rate,
             conversation.tenureMonths,
-            now
+            Date.now()
         )
         .run();
 }
@@ -365,7 +363,6 @@ async function handleInstagramMessage(env, senderId, text) {
     const message = text.trim();
     const command = message.toUpperCase();
 
-    // Cancel the current calculation.
     if (command === "CANCEL") {
         await deleteConversation(env, senderId);
 
@@ -379,7 +376,6 @@ async function handleInstagramMessage(env, senderId, text) {
         return;
     }
 
-    // Start or restart a calculation.
     if (
         command === "RESET" ||
         command === "HI" ||
@@ -392,7 +388,6 @@ async function handleInstagramMessage(env, senderId, text) {
         return;
     }
 
-    // Help instructions.
     if (command === "HELP") {
         await sendInstagramText(
             env,
@@ -408,7 +403,6 @@ async function handleInstagramMessage(env, senderId, text) {
         return;
     }
 
-    // Load the user's conversation from D1.
     const conversation = await getConversation(env, senderId);
 
     if (!conversation) {
@@ -421,10 +415,7 @@ async function handleInstagramMessage(env, senderId, text) {
         return;
     }
 
-    // --------------------------------------------------
     // Step 1: Principal
-    // --------------------------------------------------
-
     if (conversation.state === STATE.PRINCIPAL) {
         const principal = parsePrincipal(message);
 
@@ -456,10 +447,7 @@ async function handleInstagramMessage(env, senderId, text) {
         return;
     }
 
-    // --------------------------------------------------
-    // Step 2: Annual interest rate
-    // --------------------------------------------------
-
+    // Step 2: Interest rate
     if (conversation.state === STATE.RATE) {
         const rate = parseRate(message);
 
@@ -491,10 +479,7 @@ async function handleInstagramMessage(env, senderId, text) {
         return;
     }
 
-    // --------------------------------------------------
-    // Step 3: Tenure and EMI calculation
-    // --------------------------------------------------
-
+    // Step 3: Tenure and calculation
     if (conversation.state === STATE.TENURE) {
         const months = parseTenure(message);
 
@@ -512,7 +497,6 @@ async function handleInstagramMessage(env, senderId, text) {
         conversation.tenureMonths = months;
 
         try {
-            // Call the existing C++ WebAssembly engine.
             const result = calculateLoan(
                 conversation.principal,
                 conversation.rate,
@@ -526,7 +510,6 @@ async function handleInstagramMessage(env, senderId, text) {
                 conversation.tenureMonths
             );
 
-            // Delete the completed conversation.
             await deleteConversation(env, senderId);
 
             await sendInstagramText(env, senderId, reply);
@@ -669,10 +652,7 @@ function extractInstagramMessages(payload) {
                 value.message?.text ||
                 value.text;
 
-            if (
-                senderId &&
-                typeof text === "string"
-            ) {
+            if (senderId && typeof text === "string") {
                 messages.push({
                     senderId,
                     messageId:
@@ -700,7 +680,6 @@ function isDuplicateMessage(messageId) {
 
     const now = Date.now();
 
-    // Remove old IDs and cap memory usage.
     for (const [id, timestamp] of processedMessageIds) {
         if (now - timestamp > 60 * 60 * 1000) {
             processedMessageIds.delete(id);
@@ -729,10 +708,7 @@ export default {
     async fetch(request, env) {
         const url = new URL(request.url);
 
-        // --------------------------------------------------
-        // Meta webhook verification
-        // --------------------------------------------------
-
+        // Meta webhook verification.
         if (request.method === "GET") {
             const mode = url.searchParams.get("hub.mode");
             const token = url.searchParams.get("hub.verify_token");
@@ -763,10 +739,6 @@ export default {
             });
         }
 
-        // --------------------------------------------------
-        // Verify Meta webhook signature
-        // --------------------------------------------------
-
         const rawBody = await request.arrayBuffer();
 
         const validSignature = await verifyMetaSignature(
@@ -780,10 +752,6 @@ export default {
                 status: 401
             });
         }
-
-        // --------------------------------------------------
-        // Parse webhook payload
-        // --------------------------------------------------
 
         let payload;
 
@@ -803,20 +771,22 @@ export default {
             });
         }
 
-        // --------------------------------------------------
-        // Process incoming Instagram messages
-        // --------------------------------------------------
-
         const messages = extractInstagramMessages(payload);
 
         for (const message of messages) {
-            if (message.isEcho) {
-                continue;
-            }
+            if (message.isEcho) continue;
 
             if (message.senderId === INSTAGRAM_ACCOUNT_ID) {
                 continue;
             }
+
+            // TEMPORARY DIAGNOSTIC LOG:
+            // Captures the Instagram-scoped sender ID for tester approval.
+            // Does not log the message text.
+            console.log("Instagram sender detected:", {
+                senderId: message.senderId,
+                messageId: message.messageId
+            });
 
             if (isDuplicateMessage(message.messageId)) {
                 continue;
