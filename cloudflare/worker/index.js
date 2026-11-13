@@ -23,8 +23,8 @@ const processedMessageIds = new Map();
 // C++ WebAssembly engine
 // --------------------------------------------------
 
-const wasmResult = await WebAssembly.instantiate(loanWasmModule, {});
-const loanEngine = wasmResult.instance.exports;
+const loanWasmInstance = await WebAssembly.instantiate(loanWasmModule, {});
+const loanEngine = loanWasmInstance.exports;
 
 function calculateLoan(principal, rate, months) {
     const status = loanEngine.dfi_calculate_loan(
