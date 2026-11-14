@@ -62,8 +62,20 @@ jobs:
       - name: Run Cloudflare input parser tests
         run: node tests/cloudflare/input_parser.test.cjs
 
-      - name: Install Playwright
-        run: npm install --no-save playwright
+      - name: Install Node test dependencies
+        run: npm install --no-save esbuild playwright
+
+      - name: Bundle Cloudflare Worker for local simulation
+        run: >
+          npx esbuild cloudflare/worker/index.js
+          --bundle
+          --platform=node
+          --format=esm
+          --loader:.wasm=binary
+          --outfile=build-wasm/worker/worker.mjs
+
+      - name: Run Worker concurrency simulation
+        run: node tests/cloudflare/worker_concurrency.test.cjs build-wasm/worker/worker.mjs
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
