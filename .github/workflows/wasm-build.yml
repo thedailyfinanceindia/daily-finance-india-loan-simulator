@@ -71,6 +71,7 @@ jobs:
           --bundle
           --platform=node
           --format=esm
+          --target=node20
           --loader:.wasm=binary
           --outfile=build-wasm/worker/worker.mjs
 

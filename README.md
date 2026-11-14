@@ -53,18 +53,31 @@ browser tests. The Worker concurrency simulation runs locally against an
 in-memory D1 substitute and intercepts outgoing `fetch` calls; it does not
 contact Cloudflare or Instagram.
 
-### Run the Worker concurrency simulation on Windows
+### Run the pre-push tests on Windows
 
-Run these commands from the repository root in PowerShell. Node.js 22 and npm
-are required. The checked-in `cloudflare/worker/loan_worker.wasm` file is
-bundled with the Worker for the test.
+From the repository root, run one command in PowerShell:
 
 ```powershell
-npm install --no-save esbuild
-New-Item -ItemType Directory -Force build-wasm\worker | Out-Null
-npx esbuild cloudflare\worker\index.js --bundle --platform=node --format=esm --loader:.wasm=binary --outfile=build-wasm\worker\worker.mjs
-node tests\cloudflare\worker_concurrency.test.cjs build-wasm\worker\worker.mjs
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prepush-windows.ps1
 ```
+
+[scripts/prepush-windows.ps1](scripts/prepush-windows.ps1) checks for existing
+tools and packages before installing anything. It installs missing
+prerequisites with `winget`, installs and activates the official Emscripten
+SDK, loads its environment into the script process, builds the WebAssembly
+artifacts, then runs the Worker, parser, concurrency, and browser tests. It
+does not close or restart your PowerShell window.
+
+The script requires `winget` and an internet connection. First-time package
+installs may require approval or elevation and the Emscripten SDK is a large
+download. If a tool is registered as installed but is still unavailable on
+`PATH`, the script stops with an error instead of repeating Winget's
+"no available upgrade" result. Fix the installation and rerun the same
+command. The Worker test bundle targets Node 20 to avoid depending on newer
+`Uint8Array.fromBase64` support.
+
+The script runs tests only; it does not deploy to Cloudflare or contact
+Instagram. CI also builds the artifacts and runs the test suite automatically.
 
 The simulation sends concurrent, signed webhook requests for 16 synthetic
 sender IDs and checks that:
@@ -74,16 +87,6 @@ sender IDs and checks that:
 - Concurrent `RESET` messages for one sender leave a fresh conversation.
 - A sender outside the allow-list does not receive a reply or get a
   conversation stored.
-
-Other focused tests can be run with:
-
-```powershell
-node tests\cloudflare\input_parser.test.cjs
-node tests\wasm\loan_worker.test.cjs
-```
-
-The WebAssembly test expects `build-wasm\worker\loan_worker.wasm` to have been
-built first. The CI workflow creates this artifact with Emscripten.
 
 ### What the simulation does not test
 
