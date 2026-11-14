@@ -128,9 +128,16 @@ if ($missingCommands) {
 }
 
 Write-Host "Installing temporary Node test dependencies..."
-& npm install --no-save esbuild playwright
+& npm install --no-save esbuild playwright wrangler@4.161.0
 if ($LASTEXITCODE -ne 0) {
     throw "Node test dependencies could not be installed."
+}
+
+Write-Host "Validating the D1 migrations against a local database..."
+& npx wrangler d1 migrations apply dfi-instagram-conversations-dev `
+    --local --config cloudflare\wrangler.toml
+if ($LASTEXITCODE -ne 0) {
+    throw "Local D1 migrations failed."
 }
 
 Write-Host "Configuring and building WebAssembly..."

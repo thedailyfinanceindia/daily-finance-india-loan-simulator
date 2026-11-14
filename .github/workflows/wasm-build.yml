@@ -63,7 +63,10 @@ jobs:
         run: node tests/cloudflare/input_parser.test.cjs
 
       - name: Install Node test dependencies
-        run: npm install --no-save esbuild playwright
+        run: npm install --no-save esbuild playwright wrangler@4.161.0
+
+      - name: Validate D1 migrations locally
+        run: npx wrangler d1 migrations apply dfi-instagram-conversations-dev --local --config cloudflare/wrangler.toml
 
       - name: Bundle Cloudflare Worker for local simulation
         run: >
@@ -117,7 +120,7 @@ jobs:
 
     if: >
       github.event_name == 'push' &&
-      github.ref != 'refs/heads/main'
+      github.ref == 'refs/heads/develop'
 
     needs: build
     runs-on: ubuntu-latest
@@ -143,6 +146,7 @@ jobs:
           test -f cloudflare/worker/input_parser.mjs
           test -f cloudflare/worker/loan_worker.wasm
           test -f cloudflare/migrations/0002_processed_messages.sql
+          test -f cloudflare/migrations/0003_webhook_reliability.sql
 
       - name: Apply staging D1 migrations
         uses: cloudflare/wrangler-action@v4
