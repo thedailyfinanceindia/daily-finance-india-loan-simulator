@@ -1,12 +1,9 @@
-
 name: Build and Deploy Loan Calculator
 
 on:
   push:
     branches:
-      - feature/web-loan-simulator
-      - develop
-      - main
+      - '**'
 
   pull_request:
     branches:
@@ -62,8 +59,24 @@ jobs:
       - name: Run Worker WebAssembly tests
         run: node tests/wasm/loan_worker.test.cjs
 
-      - name: Install Playwright
-        run: npm install --no-save playwright
+      - name: Run Cloudflare input parser tests
+        run: node tests/cloudflare/input_parser.test.cjs
+
+      - name: Install Node test dependencies
+        run: npm install --no-save esbuild playwright
+
+      - name: Bundle Cloudflare Worker for local simulation
+        run: >
+          npx esbuild cloudflare/worker/index.js
+          --bundle
+          --platform=node
+          --format=esm
+          --target=node20
+          --loader:.wasm=binary
+          --outfile=build-wasm/worker/worker.mjs
+
+      - name: Run Worker concurrency simulation
+        run: node tests/cloudflare/worker_concurrency.test.cjs build-wasm/worker/worker.mjs
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
@@ -86,11 +99,15 @@ jobs:
           retention-days: 7
 
       - name: Configure GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: build-wasm/web/
@@ -100,10 +117,14 @@ jobs:
 
     if: >
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/develop'
+      github.ref != 'refs/heads/main'
 
     needs: build
     runs-on: ubuntu-latest
+
+    concurrency:
+      group: dfi-shared-staging-worker
+      cancel-in-progress: false
 
     steps:
       - name: Checkout repository
@@ -119,7 +140,18 @@ jobs:
         run: |
           test -f cloudflare/wrangler.toml
           test -f cloudflare/worker/index.js
+          test -f cloudflare/worker/input_parser.mjs
           test -f cloudflare/worker/loan_worker.wasm
+          test -f cloudflare/migrations/0002_processed_messages.sql
+
+      - name: Apply staging D1 migrations
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.161.0"
+          workingDirectory: cloudflare
+          command: d1 migrations apply dfi-instagram-conversations-dev --remote --config wrangler.toml
 
       - name: Deploy staging Worker
         uses: cloudflare/wrangler-action@v4
