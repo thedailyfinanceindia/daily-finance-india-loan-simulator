@@ -49,11 +49,14 @@ export function parsePrincipal(text) {
 export function parseRate(text) {
     if (typeof text !== "string") return null;
 
-    const normalized = text.trim().replace(/%/g, "").trim();
+    const normalized = text.trim();
 
-    if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null;
+    // Accept a number with an optional single trailing percent sign.
+    const match = normalized.match(/^(\d+(?:\.\d+)?)\s*%?$/);
 
-    const rate = Number(normalized);
+    if (!match) return null;
+
+    const rate = Number(match[1]);
 
     if (
         !Number.isFinite(rate) ||
