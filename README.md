@@ -14,8 +14,26 @@ calculator and an Instagram messaging Worker for guided EMI calculations.
 
 The Cloudflare Worker keeps each Instagram sender's conversation in D1. The
 sender ID is the conversation key; the Worker also checks the configured
-sender allow-list before processing a message. The D1 `processed_messages`
-table prevents a retried webhook message from being handled twice.
+sender allow-list before processing a message. Verified webhook messages are
+first persisted to a D1 inbox with a unique message ID. Conversation state
+changes and their intended replies are committed together with an outbound
+record. A per-sender lease serializes processing, and a one-minute Cron Trigger
+retries pending replies and recovers queued work after a Worker interruption.
+Every state transition and outbound status update is fenced by the sender's
+lock token and an unexpired lease checked by D1. The Worker renews the lease
+before sending; a process that loses ownership cannot commit its stale result.
+
+Outbound delivery is at-least-once. If Instagram accepts a reply but the
+Worker fails before it can record that success in D1, a later retry can send
+the reply again; the API does not provide a reliable idempotency guarantee for
+this operation. Transient network errors, HTTP 408/425/429 and 5xx responses
+are retried with exponential backoff, up to eight send attempts. A Meta error
+marked `is_transient` is also retried. Other 4xx responses are treated as
+permanent. Permanent errors and exhausted retries are marked `failed`, logged
+with their error, and retained for seven days; they no longer block later
+messages from that sender. A sender cannot be notified through the same Send
+API when Meta rejects delivery. The older `processed_messages` table is
+retained for compatibility and periodic cleanup.
 
 ## Cloudflare configuration
 
@@ -48,10 +66,17 @@ the Worker runtime variables or in source control.
 
 ## Tests
 
-The GitHub Actions build runs the WebAssembly, parser, Worker simulation, and
-browser tests. The Worker concurrency simulation runs locally against an
-in-memory D1 substitute and intercepts outgoing `fetch` calls; it does not
-contact Cloudflare or Instagram.
+The GitHub Actions build validates D1 migrations locally, then runs the
+WebAssembly, parser, Worker simulation, and browser tests. The Worker
+simulation uses an in-memory D1 substitute and intercepts outgoing `fetch`
+calls; it does not contact Cloudflare or Instagram. A successful pull request
+build targeting `develop` deploys the Instagram Worker to staging when the PR
+comes from this repository. A push to `develop` also deploys staging. Pull
+requests from forks run validation only because Cloudflare credentials are not
+available to them. PR deployments use the existing shared staging Worker and
+D1 database, so each deployment replaces the code currently being tested there;
+coordinate staging tests if multiple PRs are open. Production website
+deployment remains limited to pushes to `main`.
 
 ### Run the pre-push tests on Windows
 
@@ -69,8 +94,8 @@ artifacts, then runs the Worker, parser, concurrency, and browser tests. It
 does not close or restart your PowerShell window.
 
 The script requires `winget` and an internet connection. First-time package
-installs may require approval or elevation and the Emscripten SDK is a large
-download. If a tool is registered as installed but is still unavailable on
+installs may require approval or elevation; Wrangler and the Emscripten SDK
+are downloads. If a tool is registered as installed but is still unavailable on
 `PATH`, the script stops with an error instead of repeating Winget's
 "no available upgrade" result. Fix the installation and rerun the same
 command. The Worker test bundle targets Node 20 to avoid depending on newer
@@ -83,19 +108,32 @@ The simulation sends concurrent, signed webhook requests for 16 synthetic
 sender IDs and checks that:
 
 - Each sender gets a separate conversation and reply.
-- A webhook event delivered twice concurrently is processed only once.
+- Duplicate webhook deliveries produce a single state transition and reply.
+- Different messages for one sender are processed by provider timestamp;
+  late older events are rejected without overwriting newer state.
 - Concurrent `RESET` messages for one sender leave a fresh conversation.
+- A failed database enqueue returns a retryable HTTP error.
+- A failed Instagram send leaves its reply pending and the scheduled retry
+  sends it without applying the conversation transition again.
+- A paused Worker that loses its sender lease cannot overwrite a takeover's
+  conversation state or send a stale reply.
+- Permanent Send API errors and exhausted transient retries become terminal,
+  while later messages for that sender continue to process.
 - A sender outside the allow-list does not receive a reply or get a
   conversation stored.
 
 ### What the simulation does not test
 
 The simulation exercises the Worker's request and conversation logic, but its
-D1 implementation is an in-memory test double. It does not measure Cloudflare
-D1 latency, Worker isolate scaling, account quotas, real network behavior, or
-Meta API rate limits. The same-sender case covers concurrent resets only; it
-does not establish ordering guarantees for different conversation-step
-messages arriving at the same time.
+D1 implementation is an in-memory test double. Migrations are separately
+applied by Wrangler to a fresh local D1 database. Migration `0003` creates the
+conversation table if it is absent, while leaving a previously created table
+untouched. These checks do not measure Cloudflare D1 latency, Worker isolate
+scaling, account quotas, real network behavior, or Meta API rate limits. The
+Worker orders messages already in its queue by provider timestamp and rejects
+older events that arrive after a newer event was processed. No webhook can
+guarantee ordering if an older event arrives after a newer event has already
+been processed, and equal timestamps cannot disambiguate provider order.
 
 ## Controlled staging concurrency check
 
@@ -119,9 +157,9 @@ recipients, so do not use customer accounts or production credentials.
    Record request duration, invocation errors, D1 errors, and Instagram Send
    API errors. Stop the test if errors appear, latency rises sharply, or an
    account limit is approached.
-6. Do not send rapid, out-of-order steps from the same account as a substitute
-   for ordinary user behavior. The current simulation does not test ordering
-   of concurrent step messages from one sender.
+6. Confirm an older event arriving after a newer one gets a resend prompt,
+   rather than advancing or overwriting the conversation. Do not use rapid,
+   out-of-order steps as a load test; ordinary users should follow each reply.
 
 Keep each test short and low-volume, and stay within the limits of the
 Cloudflare and Meta accounts. This manual check is a cautious staging exercise,
