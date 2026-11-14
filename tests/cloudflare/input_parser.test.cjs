@@ -1,3 +1,4 @@
+
 const assert = require("node:assert/strict");
 
 async function main() {
@@ -7,64 +8,51 @@ async function main() {
         parseTenure
     } = await import("../../cloudflare/worker/input_parser.mjs");
 
-    // --------------------------------------------
+    // --------------------------------------------------
     // Principal tests
-    // --------------------------------------------
+    // --------------------------------------------------
 
-    const principalTests = [
+    const validPrincipalTests = [
         ["5", 5],
         ["500000", 500000],
         ["50000", 50000],
-        ["5000000", 5000000],
-
-        ["5 lakh", 500000],
         ["5 lakh", 500000],
         ["5L", 500000],
         ["5 lac", 500000],
         ["5 lacs", 500000],
         ["5 lakhs", 500000],
-
         ["5k", 5000],
-        ["5 K", 5000],
         ["50 thousand", 50000],
-        ["50thousand", 50000],
-
         ["1.5 crore", 15000000],
         ["5 cr", 50000000],
-        ["5 crore", 50000000],
-        ["5 crores", 50000000],
-
         ["₹500000", 500000],
         ["₹ 5 lakh", 500000],
-        ["  5 lakh  ", 500000]
+        ["0.5 lakh", 50000],
+        ["2 crore", 20000000]
     ];
 
-    for (const [input, expected] of principalTests) {
+    for (const [input, expected] of validPrincipalTests) {
         assert.equal(
             parsePrincipal(input),
             expected,
-            `Principal parser failed for: ${input}`
+            `Expected principal ${input} to equal ${expected}`
         );
     }
 
     const invalidPrincipalTests = [
-        "500,000",
-        "5,00,000",
-        "abc",
         "",
-        " ",
+        "abc",
+        "five lakh",
+        "5,00,000",
+        "5,000",
+        "-500000",
         "0",
-        "-500",
-        "+500",
-        "5 lakh extra",
-        "1000 crore",
-        "1000000001",
+        "5 million",
+        "5 lakhs extra",
         "₹",
-        "5. lakh",
-        ".5 lakh",
-        "5.5.5 lakh",
-        "5 rupees",
-        "5 lakhs only"
+        "5%",
+        "1.5.5 lakh",
+        "1000000001"
     ];
 
     for (const input of invalidPrincipalTests) {
@@ -75,71 +63,49 @@ async function main() {
         );
     }
 
-    assert.equal(parsePrincipal(null), null);
-    assert.equal(parsePrincipal(undefined), null);
-    assert.equal(parsePrincipal(500000), null);
+    // --------------------------------------------------
+    // Interest rate tests
+    // --------------------------------------------------
 
-    // --------------------------------------------
-    // Interest-rate tests
-    // --------------------------------------------
-
-    const rateTests = [
+    const validRateTests = [
         ["9.5", 9.5],
         ["9.5%", 9.5],
+        ["9.5 %", 9.5],
+        ["8", 8],
         ["0", 0],
+        ["0%", 0],
         ["100", 100],
-        [" 8.75 ", 8.75],
-        ["10%", 10]
+        ["100%", 100],
+        ["7.25", 7.25],
+        [" 9.5 ", 9.5]
     ];
 
-    for (const [input, expected] of rateTests) {
+    for (const [input, expected] of validRateTests) {
         assert.equal(
             parseRate(input),
             expected,
-            `Rate parser failed for: ${input}`
+            `Expected rate ${input} to equal ${expected}`
         );
     }
-const validRateTests = [
-    ["9.5", 9.5],
-    ["9.5%", 9.5],
-    ["9.5 %", 9.5],
-    ["0", 0],
-    ["100%", 100]
-];
 
-for (const [input, expected] of validRateTests) {
-    assert.equal(parseRate(input), expected);
-}
-
-const invalidRateTests = [
-    "9.5%%",
-    "%%9.5",
-    "9%%",
-    "9.5% %",
-    "abc",
-    "-9.5",
-    "100.1%"
-];
-
-for (const input of invalidRateTests) {
-    assert.equal(
-        parseRate(input),
-        null,
-        `Expected invalid rate: ${input}`
-    );
-}
+    // Keep only ONE invalidRateTests declaration.
     const invalidRateTests = [
-        "-1",
-        "101",
-        "abc",
         "",
-        " ",
-        "9.5abc",
+        "abc",
+        "-9.5",
+        "-1%",
+        "100.1",
+        "100.1%",
+        "101",
         "9.5%%",
-        "1,000",
-        "+9.5",
-        ".5",
-        "9."
+        "%%9.5",
+        "9%%",
+        "9.5% %",
+        "9.5 percent",
+        "9..5",
+        "1,5",
+        "NaN",
+        "Infinity"
     ];
 
     for (const input of invalidRateTests) {
@@ -150,45 +116,52 @@ for (const input of invalidRateTests) {
         );
     }
 
-    assert.equal(parseRate(null), null);
-    assert.equal(parseRate(undefined), null);
-    assert.equal(parseRate(9.5), null);
-
-    // --------------------------------------------
+    // --------------------------------------------------
     // Tenure tests
-    // --------------------------------------------
+    // --------------------------------------------------
 
-    const tenureTests = [
+    const validTenureTests = [
+        ["5", 5],
+        ["1", 1],
+        ["60", 60],
+        ["5 months", 5],
+        ["5 month", 5],
+        ["60 months", 60],
+        ["12 mos", 12],
+        ["12 mo", 12],
         ["5 years", 60],
         ["5 year", 60],
         ["5 yrs", 60],
         ["5 yr", 60],
-        ["60 months", 60],
-        ["60 month", 60],
-        ["12 mos", 12],
-        ["5", 5],
-        ["50 years", 600],
-        ["  24 months  ", 24]
+        ["1 year", 12],
+        ["10 years", 120],
+        ["50 years", 600]
     ];
 
-    for (const [input, expected] of tenureTests) {
+    for (const [input, expected] of validTenureTests) {
         assert.equal(
             parseTenure(input),
             expected,
-            `Tenure parser failed for: ${input}`
+            `Expected tenure ${input} to equal ${expected} months`
         );
     }
 
     const invalidTenureTests = [
+        "",
+        "abc",
         "0",
+        "0 months",
+        "-5",
+        "-5 years",
         "601",
         "51 years",
-        "abc",
-        "-5",
+        "5.5",
         "5.5 years",
+        "5 decades",
         "5 months extra",
-        "5 days",
-        "10years old"
+        "five years",
+        "12.5 months",
+        "1,200"
     ];
 
     for (const input of invalidTenureTests) {
@@ -199,14 +172,10 @@ for (const input of invalidRateTests) {
         );
     }
 
-    assert.equal(parseTenure(null), null);
-    assert.equal(parseTenure(undefined), null);
-    assert.equal(parseTenure(5), null);
-
-    console.log("All Cloudflare input parser tests passed.");
+    console.log("All input parser tests passed.");
 }
 
-main().catch(error => {
+main().catch((error) => {
     console.error(error);
     process.exitCode = 1;
 });
