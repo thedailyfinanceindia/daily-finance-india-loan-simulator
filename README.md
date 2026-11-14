@@ -5,12 +5,42 @@ calculator and an Instagram messaging Worker for guided EMI calculations.
 
 ## Components
 
-- `src/` and `include/`: C++ loan calculation and comparison code.
+- `src/` and `include/`: C++ loan calculation, comparison, and amortization.
 - `web/`: browser-based loan calculator.
 - `cloudflare/worker/`: Instagram webhook Worker, input parsing, and the
   WebAssembly loan engine.
 - `cloudflare/migrations/`: D1 database migrations.
 - `tests/`: C++, browser, WebAssembly, parser, and Worker simulation tests.
+
+The Worker entry point in `cloudflare/worker/index.js` handles webhook and
+scheduled requests. Conversation rules, D1 persistence, queued message
+processing, Instagram delivery, and webhook parsing live in separate modules
+beside it. The browser entry point in `web/app.js` handles the basic EMI form;
+`web/scenario_planner.js` coordinates what-if inputs and simulations, while
+`web/scenario_view.js` renders projection results.
+
+## Existing-loan scenarios
+
+The browser calculator can project one rate revision or a schedule of planned
+prepayments for an existing loan. Enter the outstanding balance, current annual
+rate, current EMI, and remaining term:
+
+- A rate revision compares keeping the current EMI (which can change the payoff
+  term) with recalculating the EMI to keep the stated remaining term.
+- Prepayment scenarios compare keeping the current EMI to reduce the payoff
+  term with recalculating the EMI after each prepayment to keep the stated
+  remaining term.
+- A prepayment is applied after that installment's regular EMI. Multiple
+  prepayments in one installment are combined, and the amount applied is capped
+  at the remaining balance.
+
+The projections use monthly interest at the annual rate divided by 12, do not
+round values to paise during calculations, and support at most 600 installments.
+The fixed-EMI projections may run longer than the entered remaining term, up to
+that 600-installment limit; EMI-recalculation projections target the entered
+remaining term. These estimates do not account for lender-specific rounding,
+fees, rate-change timing, or other loan terms. Confirm any decision with your
+lender.
 
 The Cloudflare Worker keeps each Instagram sender's conversation in D1. The
 sender ID is the conversation key; the Worker also checks the configured
@@ -67,7 +97,9 @@ the Worker runtime variables or in source control.
 ## Tests
 
 The GitHub Actions build validates D1 migrations locally, then runs the
-WebAssembly, parser, Worker simulation, and browser tests. The Worker
+WebAssembly, parser, Worker simulation, C++ amortization, and browser tests.
+The browser tests cover rate-revision projections, both prepayment strategies,
+dynamic prepayment rows, and scenario validation. The Worker
 simulation uses an in-memory D1 substitute and intercepts outgoing `fetch`
 calls; it does not contact Cloudflare or Instagram. A successful pull request
 build targeting `develop` deploys the Instagram Worker to staging when the PR
@@ -90,8 +122,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prepush-windows.ps
 tools and packages before installing anything. It installs missing
 prerequisites with `winget`, installs and activates the official Emscripten
 SDK, loads its environment into the script process, builds the WebAssembly
-artifacts, then runs the Worker, parser, concurrency, and browser tests. It
-does not close or restart your PowerShell window.
+artifacts, copies the browser module into `web/` for VS Code Live Server, then
+runs the Worker, parser, concurrency, and browser tests. It does not close or
+restart your PowerShell window.
+
+The copied browser loader and WebAssembly binary are generated, ignored
+artifacts; CI assembles them in `build-wasm/web/`.
 
 The script requires `winget` and an internet connection. First-time package
 installs may require approval or elevation; Wrangler and the Emscripten SDK

@@ -4,7 +4,9 @@ const http = require("node:http");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
-const webRoot = path.resolve(__dirname, "../../build-wasm/web");
+const webRoot = process.env.LOAN_CALCULATOR_WEB_ROOT
+    ? path.resolve(process.env.LOAN_CALCULATOR_WEB_ROOT)
+    : path.resolve(__dirname, "../../build-wasm/web");
 
 const mimeTypes = {
     ".html": "text/html",
@@ -64,8 +66,98 @@ async function main() {
 
         await page.waitForFunction(() => {
             const button = document.querySelector("#calculate-button");
-            return button && !button.disabled;
+            const rateButton = document.querySelector("#simulate-rate-button");
+            const prepaymentButton = document.querySelector(
+                "#simulate-prepayment-button"
+            );
+            return button && !button.disabled &&
+                rateButton && !rateButton.disabled &&
+                prepaymentButton && !prepaymentButton.disabled;
         }, null, { timeout: 15000 });
+
+        await page.locator("#outstanding-balance").fill("1000000");
+        await page.locator("#current-interest-rate").fill("10");
+        await page.locator("#current-emi").fill("21247.044711268275");
+        await page.locator("#remaining-tenure").fill("60");
+        await page.locator("#revised-interest-rate").fill("12");
+        await page.locator("#simulate-rate-button").click();
+        await page.locator("#rate-results .scenario-card").first().waitFor({
+            state: "visible"
+        });
+        assert.equal(await page.locator("#rate-results .scenario-card").count(), 3);
+        const keepEmiResults = await page.locator(
+            "#rate-results .scenario-card"
+        ).nth(1).innerText();
+        const keepTenureResults = await page.locator(
+            "#rate-results .scenario-card"
+        ).nth(2).innerText();
+        assert.match(keepEmiResults, /64/);
+        assert.match(keepTenureResults, /₹22,244\.45/);
+        assert.match(
+            await page.locator("#rate-results").innerText(),
+            /Revised rate, keep tenure/
+        );
+
+        await page.locator("#add-prepayment-button").click();
+        const prepaymentRows = page.locator(
+            "#prepayment-events .prepayment-event"
+        );
+        assert.equal(await prepaymentRows.count(), 2);
+        await prepaymentRows.nth(1).locator(".prepayment-installment").fill("24");
+        await prepaymentRows.nth(1).locator(".prepayment-amount").fill("50000");
+        await page.locator("#simulate-prepayment-button").click();
+        await page.locator("#prepayment-results .scenario-card").first().waitFor({
+            state: "visible"
+        });
+        assert.equal(
+            await page.locator("#prepayment-results .scenario-card").count(),
+            3
+        );
+        assert.match(
+            await page.locator("#prepayment-results").innerText(),
+            /Prepayments applied/
+        );
+        const reduceTenureResults = await page.locator(
+            "#prepayment-results .scenario-card"
+        ).nth(1).innerText();
+        const reduceEmiResults = await page.locator(
+            "#prepayment-results .scenario-card"
+        ).nth(2).innerText();
+        assert.match(reduceTenureResults, /Installments\s+51/);
+        assert.match(reduceTenureResults, /₹2,16,317\.95/);
+        assert.match(reduceEmiResults, /₹2,45,001\.35/);
+        await prepaymentRows.nth(1).locator(".remove-prepayment-button").click();
+        assert.equal(await prepaymentRows.count(), 1);
+
+        await page.locator("#remaining-tenure").fill("11");
+        await page.locator("#simulate-prepayment-button").click();
+        assert.match(
+            await page.locator("#simulation-error").innerText(),
+            /within the remaining term/
+        );
+        await page.locator("#remaining-tenure").fill("240");
+
+        await page.locator("#current-interest-rate").fill("");
+        await page.locator("#simulate-rate-button").click();
+        assert.match(
+            await page.locator("#simulation-error").innerText(),
+            /current rate between 0 and 100/
+        );
+        await page.locator("#current-interest-rate").fill("10");
+
+        await page.locator("#revised-interest-rate").fill("");
+        await page.locator("#simulate-rate-button").click();
+        assert.match(
+            await page.locator("#simulation-error").innerText(),
+            /revised rate between 0 and 100/
+        );
+        await page.locator("#revised-interest-rate").fill("101");
+        await page.locator("#simulate-rate-button").click();
+        assert.match(
+            await page.locator("#simulation-error").innerText(),
+            /revised rate between 0 and 100/
+        );
+        await page.locator("#revised-interest-rate").fill("9.5");
 
         await button.click();
         await page.locator("#results").waitFor({ state: "visible" });
@@ -92,6 +184,9 @@ async function main() {
         console.log("PASS: Default EMI calculation");
         console.log("PASS: Zero-interest calculation");
         console.log("PASS: Invalid interest-rate validation");
+        console.log("PASS: Rate-revision scenarios");
+        console.log("PASS: Prepayment scenarios and dynamic event rows");
+        console.log("PASS: Scenario input validation");
         console.log("PASS: No uncaught browser errors");
     } finally {
         if (browser) await browser.close();

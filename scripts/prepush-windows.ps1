@@ -152,7 +152,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "WebAssembly build failed."
 }
 
-Copy-Item web\* build-wasm\web -Recurse -Force
+Copy-Item web\* build-wasm\web -Recurse -Force `
+    -Exclude "loan_calculator.js", "loan_calculator.wasm"
+Copy-Item build-wasm\web\loan_calculator.js web\ -Force
+Copy-Item build-wasm\web\loan_calculator.wasm web\ -Force
 
 Write-Host "Running WebAssembly and parser tests..."
 & node tests\wasm\loan_worker.test.cjs

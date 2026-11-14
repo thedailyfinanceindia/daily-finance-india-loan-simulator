@@ -8,7 +8,7 @@
     <title>Home Loan EMI Calculator | Daily Finance India</title>
     <link rel="stylesheet" href="./styles.css">
     <script src="./loan_calculator.js"></script>
-    <script defer src="./app.js"></script>
+    <script type="module" src="./app.js"></script>
 </head>
 <body>
     <header class="site-header">
@@ -71,10 +71,100 @@
             </div>
         </section>
 
+        <section class="scenario-planner" aria-labelledby="scenario-heading">
+            <p class="eyebrow">EXISTING LOAN WHAT-IF</p>
+            <h2 id="scenario-heading">Rate changes and prepayments</h2>
+            <p class="scenario-intro">
+                Use your current outstanding balance, EMI and remaining term to
+                compare rate revisions or planned prepayments.
+            </p>
+
+            <div class="scenario-input-grid">
+                <div class="field">
+                    <label for="outstanding-balance">Outstanding balance (₹)</label>
+                    <input id="outstanding-balance" type="number" min="0.01"
+                           max="1000000000" value="5000000" step="0.01" required>
+                </div>
+                <div class="field">
+                    <label for="current-interest-rate">Current annual rate (%)</label>
+                    <input id="current-interest-rate" type="number" min="0" max="100"
+                           value="8.5" step="0.01" required>
+                </div>
+                <div class="field">
+                    <label for="current-emi">Current monthly EMI (₹)</label>
+                    <input id="current-emi" type="number" min="0.01"
+                           value="43391.16" step="0.01" required>
+                </div>
+                <div class="field">
+                    <label for="remaining-tenure">Remaining tenure (months)</label>
+                    <input id="remaining-tenure" type="number" min="1" max="600"
+                           value="240" step="1" required>
+                </div>
+            </div>
+
+            <section class="scenario-section" aria-labelledby="rate-heading">
+                <h3 id="rate-heading">Rate revision</h3>
+                <div class="scenario-input-grid">
+                    <div class="field">
+                        <label for="revised-interest-rate">Revised annual rate (%)</label>
+                        <input id="revised-interest-rate" type="number" min="0"
+                               max="100" value="9.5" step="0.01" required>
+                    </div>
+                </div>
+                <button id="simulate-rate-button" type="button" disabled>
+                    Compare rate options
+                </button>
+                <div id="rate-results" class="scenario-results" aria-live="polite"
+                     hidden></div>
+            </section>
+
+            <section class="scenario-section" aria-labelledby="prepayment-heading">
+                <h3 id="prepayment-heading">Planned prepayments</h3>
+                <p class="field-help">
+                    Each extra payment is applied after that installment's regular EMI.
+                </p>
+                <div id="prepayment-events">
+                    <div class="prepayment-event">
+                        <div class="field">
+                            <label>Installment number
+                                <input class="prepayment-installment" type="number"
+                                       min="1" max="600" value="12" step="1" required>
+                            </label>
+                        </div>
+                        <div class="field">
+                            <label>Extra payment (₹)
+                                <input class="prepayment-amount" type="number"
+                                       min="0.01" value="100000" step="0.01" required>
+                            </label>
+                        </div>
+                        <button class="remove-prepayment-button secondary-button"
+                                type="button" aria-label="Remove prepayment">
+                            Remove
+                        </button>
+                    </div>
+                </div>
+                <div class="scenario-actions">
+                    <button id="add-prepayment-button" class="secondary-button"
+                            type="button">
+                        Add prepayment
+                    </button>
+                    <button id="simulate-prepayment-button" type="button" disabled>
+                        Compare prepayment options
+                    </button>
+                </div>
+                <div id="prepayment-results" class="scenario-results"
+                     aria-live="polite" hidden></div>
+            </section>
+
+            <p id="simulation-error" class="error" role="alert"></p>
+        </section>
+
         <section class="disclaimer">
             <strong>Important:</strong> This calculator provides estimates based on
             the entered interest rate and tenure. Actual lender calculations may
-            differ due to rate changes, fees, disbursement schedules and other terms.
+            differ due to lender-specific interest rounding, payment timing, fees,
+            disbursement schedules and other terms. Rate and prepayment scenarios
+            assume a fixed rate after the simulated change.
         </section>
     </main>
 

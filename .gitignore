@@ -44,6 +44,10 @@ Build/
 build-*/
 out/
 
+# Generated browser WebAssembly files
+/web/loan_calculator.js
+/web/loan_calculator.wasm
+
 # CMake generated files
 CMakeFiles/
 CMakeCache.txt
