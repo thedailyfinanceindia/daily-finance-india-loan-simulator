@@ -1,17 +1,16 @@
-
 import loanWasmModule from "./loan_worker.wasm";
+
+import {
+    parsePrincipal,
+    parseRate,
+    parseTenure
+} from "./input_parser.mjs";
 
 const GRAPH_API_VERSION = "v27.0";
 const INSTAGRAM_ACCOUNT_ID = "17841427456411892";
 
-const MAX_PRINCIPAL = 1_000_000_000;
-const MAX_ANNUAL_RATE = 100;
-const MAX_TENURE_MONTHS = 600;
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
-
-// In-memory deduplication is best-effort only.
-// Persistent deduplication should be added to D1 before production.
-const processedMessageIds = new Map();
+const MESSAGE_RETENTION_SECONDS = 24 * 60 * 60;
 
 const STATE = {
     PRINCIPAL: "WAITING_FOR_PRINCIPAL",
@@ -20,9 +19,7 @@ const STATE = {
 };
 
 // --------------------------------------------------
-// Tester allowlist
-// Configure ALLOWED_INSTAGRAM_SENDER_IDS in Cloudflare.
-// Do not hardcode tester IDs here.
+// Tester/public access control
 // --------------------------------------------------
 
 function getAllowedSenderIds(env) {
@@ -31,6 +28,28 @@ function getAllowedSenderIds(env) {
             .split(",")
             .map(id => id.trim())
             .filter(Boolean)
+    );
+}
+
+function isSenderAllowed(env, senderId) {
+    const mode = (env.BOT_ACCESS_MODE || "TESTERS")
+        .trim()
+        .toUpperCase();
+
+    if (mode === "PUBLIC") {
+        return true;
+    }
+
+    if (mode !== "TESTERS") {
+        console.error("Invalid BOT_ACCESS_MODE configuration.");
+        return false;
+    }
+
+    const allowedSenderIds = getAllowedSenderIds(env);
+
+    return (
+        allowedSenderIds.size > 0 &&
+        allowedSenderIds.has(senderId)
     );
 }
 
@@ -79,7 +98,7 @@ function calculateLoan(principal, rate, months) {
 }
 
 // --------------------------------------------------
-// Formatting and input parsing
+// Formatting
 // --------------------------------------------------
 
 function formatINR(value) {
@@ -104,85 +123,6 @@ function formatTenure(months) {
         `${years} ${years === 1 ? "year" : "years"} and ` +
         `${remainingMonths} ${remainingMonths === 1 ? "month" : "months"}`
     );
-}
-
-function parsePrincipal(text) {
-    const normalized = text
-        .toLowerCase()
-        .replace(/[₹,\s]/g, "")
-        .trim();
-
-    const match = normalized.match(
-        /^(\d+(?:\.\d+)?)(lakh|lac|lakhs|lacs|crore|cr)?$/
-    );
-
-    if (!match) return null;
-
-    let amount = Number(match[1]);
-    const unit = match[2];
-
-    if (unit && ["lakh", "lac", "lakhs", "lacs"].includes(unit)) {
-        amount *= 100000;
-    } else if (unit && ["crore", "cr"].includes(unit)) {
-        amount *= 10000000;
-    }
-
-    if (
-        !Number.isFinite(amount) ||
-        amount <= 0 ||
-        amount > MAX_PRINCIPAL
-    ) {
-        return null;
-    }
-
-    return amount;
-}
-
-function parseRate(text) {
-    const normalized = text.trim().replace(/%/g, "").trim();
-
-    if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null;
-
-    const rate = Number(normalized);
-
-    if (
-        !Number.isFinite(rate) ||
-        rate < 0 ||
-        rate > MAX_ANNUAL_RATE
-    ) {
-        return null;
-    }
-
-    return rate;
-}
-
-function parseTenure(text) {
-    const normalized = text.toLowerCase().trim();
-
-    const match = normalized.match(
-        /^(\d+)\s*(months?|mos?|years?|yrs?)?$/
-    );
-
-    if (!match) return null;
-
-    const value = Number(match[1]);
-    const unit = match[2] || "months";
-
-    let months = value;
-
-    if (unit.startsWith("year") || unit.startsWith("yr")) {
-        months = value * 12;
-    }
-
-    if (
-        !Number.isInteger(months) ||
-        months < 1 ||
-        months > MAX_TENURE_MONTHS
-    ) {
-        return null;
-    }
-
-    return months;
 }
 
 // --------------------------------------------------
@@ -298,8 +238,15 @@ async function startConversation(env, senderId) {
     return (
         "Welcome to Daily Finance India EMI Calculator!\n\n" +
         "Let's calculate your loan EMI.\n\n" +
-        "Step 1 of 3: What is your loan amount?\n" +
-        "Example: 500000 or 5 lakh"
+        "Step 1 of 3: Enter your loan amount in rupees.\n\n" +
+        "Examples:\n" +
+        "500000 = ₹5 lakh\n" +
+        "50000 = ₹50 thousand\n" +
+        "5 lakh\n" +
+        "50 lakh\n" +
+        "5 crore\n\n" +
+        "You can enter the amount in rupees or use lakh/crore.\n" +
+        "Please don't use commas."
     );
 }
 
@@ -334,12 +281,14 @@ async function handleInstagramMessage(env, senderId, text) {
 
     if (command === "CANCEL") {
         await deleteConversation(env, senderId);
+
         await sendInstagramText(
             env,
             senderId,
             "Your EMI calculation has been cancelled. " +
             "Send HI whenever you want to start again."
         );
+
         return;
     }
 
@@ -354,12 +303,16 @@ async function handleInstagramMessage(env, senderId, text) {
             env,
             senderId,
             "EMI Calculator Help\n\n" +
-            "Send HI to start.\n" +
-            "1. Enter loan amount (example: 5 lakh).\n" +
-            "2. Enter annual interest rate (example: 9.5).\n" +
-            "3. Enter tenure (example: 5 years or 60 months).\n\n" +
+            "Send HI to start.\n\n" +
+            "1. Enter loan amount in rupees or lakh/crore.\n" +
+            "   Example: 500000 or 5 lakh.\n\n" +
+            "2. Enter annual interest rate.\n" +
+            "   Example: 9.5\n\n" +
+            "3. Enter tenure.\n" +
+            "   Example: 5 years or 60 months.\n\n" +
             "Send RESET to restart or CANCEL to stop."
         );
+
         return;
     }
 
@@ -371,9 +324,11 @@ async function handleInstagramMessage(env, senderId, text) {
             senderId,
             "Welcome! Send HI, EMI or LOAN to calculate your EMI."
         );
+
         return;
     }
 
+    // Step 1: Principal
     if (conversation.state === STATE.PRINCIPAL) {
         const principal = parsePrincipal(message);
 
@@ -381,10 +336,17 @@ async function handleInstagramMessage(env, senderId, text) {
             await sendInstagramText(
                 env,
                 senderId,
-                "Please enter a valid loan amount.\n" +
-                "Example: 500000 or 5 lakh.\n" +
-                "Maximum supported amount: ₹100 crore."
+                "Invalid loan amount.\n\n" +
+                "Enter an amount such as:\n" +
+                "500000 = ₹5 lakh\n" +
+                "50000 = ₹50 thousand\n" +
+                "5 lakh\n" +
+                "50 lakh\n" +
+                "5 crore\n\n" +
+                "Maximum supported amount: ₹100 crore.\n" +
+                "Please don't use commas."
             );
+
             return;
         }
 
@@ -400,9 +362,11 @@ async function handleInstagramMessage(env, senderId, text) {
             "\n\nStep 2 of 3: Enter the annual interest rate.\n" +
             "Example: 9.5"
         );
+
         return;
     }
 
+    // Step 2: Interest rate
     if (conversation.state === STATE.RATE) {
         const rate = parseRate(message);
 
@@ -410,9 +374,11 @@ async function handleInstagramMessage(env, senderId, text) {
             await sendInstagramText(
                 env,
                 senderId,
-                "Please enter a valid annual interest rate between 0 and 100.\n" +
+                "Invalid interest rate.\n\n" +
+                "Enter an annual rate between 0 and 100.\n" +
                 "Example: 9.5"
             );
+
             return;
         }
 
@@ -426,11 +392,14 @@ async function handleInstagramMessage(env, senderId, text) {
             senderId,
             "Interest rate: " + rate +
             "% p.a.\n\nStep 3 of 3: Enter the loan tenure.\n" +
-            "Examples: 5 years or 60 months."
+            "Examples: 5 years or 60 months.\n" +
+            "A number without a unit is treated as months."
         );
+
         return;
     }
 
+    // Step 3: Tenure
     if (conversation.state === STATE.TENURE) {
         const months = parseTenure(message);
 
@@ -438,9 +407,12 @@ async function handleInstagramMessage(env, senderId, text) {
             await sendInstagramText(
                 env,
                 senderId,
-                "Please enter a valid tenure between 1 and 600 months.\n" +
-                "Examples: 5 years or 60 months."
+                "Invalid loan tenure.\n\n" +
+                "Enter a value between 1 and 600 months.\n" +
+                "Examples: 5 years or 60 months.\n" +
+                "A number without a unit is treated as months."
             );
+
             return;
         }
 
@@ -462,6 +434,7 @@ async function handleInstagramMessage(env, senderId, text) {
             await sendInstagramText(env, senderId, reply);
         } catch (error) {
             console.error("Loan calculation error:", error);
+
             await deleteConversation(env, senderId);
 
             await sendInstagramText(
@@ -582,30 +555,38 @@ function extractInstagramMessages(payload) {
 }
 
 // --------------------------------------------------
-// Best-effort in-memory webhook deduplication
+// Persistent webhook deduplication using D1
 // --------------------------------------------------
 
-function isDuplicateMessage(messageId) {
-    if (!messageId) return false;
+async function claimMessageId(env, messageId) {
+    if (!messageId) return true;
 
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 1000);
 
-    for (const [id, timestamp] of processedMessageIds) {
-        if (now - timestamp > 60 * 60 * 1000) {
-            processedMessageIds.delete(id);
-        }
-    }
+    // Expire old webhook IDs before claiming a new one.
+    await env.DB.prepare(`
+        DELETE FROM processed_messages
+        WHERE processed_at < ?
+    `).bind(now - MESSAGE_RETENTION_SECONDS).run();
 
-    if (processedMessageIds.has(messageId)) return true;
+    const result = await env.DB.prepare(`
+        INSERT OR IGNORE INTO processed_messages (
+            message_id,
+            processed_at
+        )
+        VALUES (?, ?)
+    `).bind(messageId, now).run();
 
-    processedMessageIds.set(messageId, now);
+    return result.meta?.changes === 1;
+}
 
-    if (processedMessageIds.size > 5000) {
-        const oldestId = processedMessageIds.keys().next().value;
-        processedMessageIds.delete(oldestId);
-    }
+async function releaseMessageId(env, messageId) {
+    if (!messageId) return;
 
-    return false;
+    await env.DB.prepare(`
+        DELETE FROM processed_messages
+        WHERE message_id = ?
+    `).bind(messageId).run();
 }
 
 // --------------------------------------------------
@@ -666,7 +647,6 @@ export default {
         }
 
         const messages = extractInstagramMessages(payload);
-        const allowedSenderIds = getAllowedSenderIds(env);
 
         for (const message of messages) {
             if (message.isEcho) continue;
@@ -675,26 +655,28 @@ export default {
                 continue;
             }
 
-            // Sender ID diagnostic log; message text is not logged.
             console.log("Instagram sender detected:", {
                 senderId: message.senderId,
                 messageId: message.messageId
             });
 
-            // Fail closed: an empty allowlist authorizes nobody.
-            if (
-                allowedSenderIds.size === 0 ||
-                !allowedSenderIds.has(message.senderId)
-            ) {
-                console.log("Ignoring non-allowlisted Instagram sender:", {
+            if (!isSenderAllowed(env, message.senderId)) {
+                console.log("Ignoring unauthorized Instagram sender:", {
                     senderId: message.senderId
                 });
+
                 continue;
             }
 
-            if (isDuplicateMessage(message.messageId)) continue;
+            let claimed = false;
 
             try {
+                claimed = await claimMessageId(env, message.messageId);
+
+                if (!claimed) {
+                    continue;
+                }
+
                 await handleInstagramMessage(
                     env,
                     message.senderId,
@@ -705,6 +687,18 @@ export default {
                     senderId: message.senderId,
                     error: String(error)
                 });
+
+                // Allow Meta's retry if message processing fails.
+                if (claimed) {
+                    try {
+                        await releaseMessageId(env, message.messageId);
+                    } catch (releaseError) {
+                        console.error(
+                            "Could not release failed message ID:",
+                            String(releaseError)
+                        );
+                    }
+                }
             }
         }
 
