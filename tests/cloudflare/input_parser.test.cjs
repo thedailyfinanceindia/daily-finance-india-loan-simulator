@@ -99,7 +99,35 @@ async function main() {
             `Rate parser failed for: ${input}`
         );
     }
+const validRateTests = [
+    ["9.5", 9.5],
+    ["9.5%", 9.5],
+    ["9.5 %", 9.5],
+    ["0", 0],
+    ["100%", 100]
+];
 
+for (const [input, expected] of validRateTests) {
+    assert.equal(parseRate(input), expected);
+}
+
+const invalidRateTests = [
+    "9.5%%",
+    "%%9.5",
+    "9%%",
+    "9.5% %",
+    "abc",
+    "-9.5",
+    "100.1%"
+];
+
+for (const input of invalidRateTests) {
+    assert.equal(
+        parseRate(input),
+        null,
+        `Expected invalid rate: ${input}`
+    );
+}
     const invalidRateTests = [
         "-1",
         "101",
