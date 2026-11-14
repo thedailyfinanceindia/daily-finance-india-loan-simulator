@@ -1,9 +1,6 @@
 import loanWasmModule from "./loan_worker.wasm";
 
 import {
-    MAX_PRINCIPAL,
-    MAX_ANNUAL_RATE,
-    MAX_TENURE_MONTHS,
     parsePrincipal,
     parseRate,
     parseTenure
@@ -14,9 +11,6 @@ const INSTAGRAM_ACCOUNT_ID = "17841427456411892";
 
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 const MESSAGE_RETENTION_SECONDS = 24 * 60 * 60;
-
-// Existing in-memory deduplication remains as an additional safeguard.
-const processedMessageIds = new Map();
 
 const STATE = {
     PRINCIPAL: "WAITING_FOR_PRINCIPAL",
@@ -251,6 +245,7 @@ async function startConversation(env, senderId) {
         "5 lakh\n" +
         "50 lakh\n" +
         "5 crore\n\n" +
+        "You can enter the amount in rupees or use lakh/crore.\n" +
         "Please don't use commas."
     );
 }
@@ -345,7 +340,9 @@ async function handleInstagramMessage(env, senderId, text) {
                 "Enter an amount such as:\n" +
                 "500000 = ₹5 lakh\n" +
                 "50000 = ₹50 thousand\n" +
-                "5 lakh\n\n" +
+                "5 lakh\n" +
+                "50 lakh\n" +
+                "5 crore\n\n" +
                 "Maximum supported amount: ₹100 crore.\n" +
                 "Please don't use commas."
             );
@@ -395,7 +392,8 @@ async function handleInstagramMessage(env, senderId, text) {
             senderId,
             "Interest rate: " + rate +
             "% p.a.\n\nStep 3 of 3: Enter the loan tenure.\n" +
-            "Examples: 5 years or 60 months."
+            "Examples: 5 years or 60 months.\n" +
+            "A number without a unit is treated as months."
         );
 
         return;
@@ -411,7 +409,8 @@ async function handleInstagramMessage(env, senderId, text) {
                 senderId,
                 "Invalid loan tenure.\n\n" +
                 "Enter a value between 1 and 600 months.\n" +
-                "Examples: 5 years or 60 months."
+                "Examples: 5 years or 60 months.\n" +
+                "A number without a unit is treated as months."
             );
 
             return;
@@ -564,13 +563,12 @@ async function claimMessageId(env, messageId) {
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Remove old records periodically.
+    // Expire old webhook IDs before claiming a new one.
     await env.DB.prepare(`
         DELETE FROM processed_messages
         WHERE processed_at < ?
     `).bind(now - MESSAGE_RETENTION_SECONDS).run();
 
-    // Only the first request can insert this message ID.
     const result = await env.DB.prepare(`
         INSERT OR IGNORE INTO processed_messages (
             message_id,
@@ -579,7 +577,7 @@ async function claimMessageId(env, messageId) {
         VALUES (?, ?)
     `).bind(messageId, now).run();
 
-    return result.meta.changes === 1;
+    return result.meta?.changes === 1;
 }
 
 async function releaseMessageId(env, messageId) {
@@ -670,14 +668,14 @@ export default {
                 continue;
             }
 
-            if (isDuplicateMessage(message.messageId)) continue;
-
             let claimed = false;
 
             try {
                 claimed = await claimMessageId(env, message.messageId);
 
-                if (!claimed) continue;
+                if (!claimed) {
+                    continue;
+                }
 
                 await handleInstagramMessage(
                     env,
@@ -690,7 +688,7 @@ export default {
                     error: String(error)
                 });
 
-                // Permit a future Meta retry if processing failed.
+                // Allow Meta's retry if message processing fails.
                 if (claimed) {
                     try {
                         await releaseMessageId(env, message.messageId);
