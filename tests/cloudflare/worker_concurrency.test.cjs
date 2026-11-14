@@ -16,10 +16,19 @@ class MemoryD1 {
         this.processedMessages = new Map();
         this.nextSequence = 1;
         this.failNextBatch = false;
+        this.pauseNextOutboundBatch = null;
     }
 
     prepare(sql) {
         const statement = sql.replace(/\s+/g, " ").trim().toLowerCase();
+        const hasActiveLease = (senderId, lockToken) => {
+            const lock = this.senderProcessing.get(senderId);
+            return Boolean(
+                lock &&
+                lock.lock_token === lockToken &&
+                lock.locked_until > Date.now()
+            );
+        };
         const execute = async (method, values) => {
             await Promise.resolve();
 
@@ -32,26 +41,26 @@ class MemoryD1 {
                 method === "first" &&
                 statement.startsWith("insert into sender_processing")
             ) {
-                const [senderId, lockToken, lockedUntil, now, lastActivityAt] = values;
+                const [senderId, lockToken, leaseDuration] = values;
                 let row = this.senderProcessing.get(senderId);
 
                 if (!row) {
                     row = {
                         sender_id: senderId,
                         lock_token: lockToken,
-                        locked_until: lockedUntil,
+                        locked_until: Date.now() + leaseDuration,
                         last_event_timestamp: 0,
-                        last_activity_at: lastActivityAt
+                        last_activity_at: Date.now()
                     };
                     this.senderProcessing.set(senderId, row);
                     return { last_event_timestamp: row.last_event_timestamp };
                 }
 
-                if (row.locked_until > now) return null;
+                if (row.locked_until > Date.now()) return null;
 
                 row.lock_token = lockToken;
-                row.locked_until = lockedUntil;
-                row.last_activity_at = lastActivityAt;
+                row.locked_until = Date.now() + leaseDuration;
+                row.last_activity_at = Date.now();
                 return { last_event_timestamp: row.last_event_timestamp };
             }
 
@@ -63,7 +72,7 @@ class MemoryD1 {
                 const row = Array.from(this.inbox.values())
                     .filter(item =>
                         item.sender_id === senderId &&
-                        item.status !== "completed"
+                        ["queued", "reply_pending"].includes(item.status)
                     )
                     .sort((a, b) =>
                         a.event_timestamp - b.event_timestamp ||
@@ -92,6 +101,7 @@ class MemoryD1 {
                             row.status === "queued" ||
                             (
                                 row.status === "reply_pending" &&
+                                this.outbound.get(row.message_id)?.status === "pending" &&
                                 this.outbound.get(row.message_id)?.next_attempt_at <= now
                             )
                         )
@@ -128,7 +138,8 @@ class MemoryD1 {
                     received_at: receivedAt,
                     status: "queued",
                     last_error: null,
-                    completed_at: null
+                    completed_at: null,
+                    failed_at: null
                 });
                 return { meta: { changes: 1 } };
             }
@@ -140,8 +151,13 @@ class MemoryD1 {
                     principal,
                     rate,
                     tenureMonths,
-                    updatedAt
+                    lockSenderId,
+                    lockToken
                 ] = values;
+
+                if (!hasActiveLease(lockSenderId, lockToken)) {
+                    return { meta: { changes: 0 } };
+                }
 
                 this.conversations.set(senderId, {
                     sender_id: senderId,
@@ -149,19 +165,31 @@ class MemoryD1 {
                     principal,
                     annual_rate: rate,
                     tenure_months: tenureMonths,
-                    updated_at: updatedAt
+                    updated_at: Date.now()
                 });
                 return { meta: { changes: 1 } };
             }
 
             if (statement.startsWith("delete from conversations")) {
+                if (!hasActiveLease(values[1], values[2])) {
+                    return { meta: { changes: 0 } };
+                }
                 const changes = this.conversations.delete(values[0]) ? 1 : 0;
                 return { meta: { changes } };
             }
 
             if (statement.startsWith("insert or ignore into outbound_messages")) {
-                const [messageId, recipientId, messageText, createdAt] = values;
+                const [
+                    messageId,
+                    recipientId,
+                    messageText,
+                    lockSenderId,
+                    lockToken
+                ] = values;
 
+                if (!hasActiveLease(lockSenderId, lockToken)) {
+                    return { meta: { changes: 0 } };
+                }
                 if (this.outbound.has(messageId)) {
                     return { meta: { changes: 0 } };
                 }
@@ -174,14 +202,26 @@ class MemoryD1 {
                     attempt_count: 0,
                     next_attempt_at: 0,
                     last_error: null,
-                    created_at: createdAt,
-                    sent_at: null
+                    created_at: Date.now(),
+                    sent_at: null,
+                    failed_at: null
                 });
                 return { meta: { changes: 1 } };
             }
 
             if (statement.startsWith("update webhook_inbox")) {
-                const row = this.inbox.get(values[values.length - 1]);
+                let messageId;
+                let lockSenderId;
+                let lockToken;
+                if (statement.includes("set status = ?")) {
+                    [, , , messageId, lockSenderId, lockToken] = values;
+                } else {
+                    [messageId, lockSenderId, lockToken] = values;
+                }
+                if (!hasActiveLease(lockSenderId, lockToken)) {
+                    return { meta: { changes: 0 } };
+                }
+                const row = this.inbox.get(messageId);
                 if (!row) return { meta: { changes: 0 } };
 
                 if (statement.includes("set status = 'reply_pending'")) {
@@ -190,8 +230,16 @@ class MemoryD1 {
                 } else if (statement.includes("set status = 'completed'")) {
                     if (row.status !== "reply_pending") return { meta: { changes: 0 } };
                     row.status = "completed";
-                    row.completed_at = values[0];
+                    row.completed_at = Date.now();
                     row.last_error = null;
+                } else if (statement.includes("set status = ?")) {
+                    const [status, error, failed] = values;
+                    if (row.status !== "reply_pending") {
+                        return { meta: { changes: 0 } };
+                    }
+                    row.status = status;
+                    row.last_error = error;
+                    row.failed_at = failed ? Date.now() : null;
                 } else if (statement.includes("set last_error = ?")) {
                     row.last_error = values[0];
                 } else {
@@ -202,20 +250,29 @@ class MemoryD1 {
             }
 
             if (statement.startsWith("update outbound_messages")) {
-                const messageId = values[values.length - 1];
+                const sent = statement.includes("set status = 'sent'");
+                const messageId = sent ? values[0] : values[4];
+                const lockSenderId = sent ? values[1] : values[5];
+                const lockToken = sent ? values[2] : values[6];
+                if (!hasActiveLease(lockSenderId, lockToken)) {
+                    return { meta: { changes: 0 } };
+                }
                 const row = this.outbound.get(messageId);
                 if (!row || row.status !== "pending") {
                     return { meta: { changes: 0 } };
                 }
 
-                if (statement.includes("set status = 'sent'")) {
+                if (sent) {
                     row.status = "sent";
-                    row.sent_at = values[0];
+                    row.sent_at = Date.now();
                     row.last_error = null;
-                } else if (statement.includes("set attempt_count")) {
+                } else if (statement.includes("attempt_count = attempt_count + 1")) {
+                    const [status, nextAttemptAt, error, failed] = values;
+                    row.status = status;
                     row.attempt_count++;
-                    row.next_attempt_at = values[0];
-                    row.last_error = values[1];
+                    row.next_attempt_at = nextAttemptAt;
+                    row.last_error = error;
+                    row.failed_at = failed ? Date.now() : null;
                 } else {
                     throw new Error(`Unsupported outbound update: ${statement}`);
                 }
@@ -224,38 +281,32 @@ class MemoryD1 {
             }
 
             if (statement.startsWith("update sender_processing")) {
-                if (statement.includes("set locked_until = ?")) {
-                    const [
-                        lockedUntil,
-                        lastActivityAt,
-                        senderId,
-                        lockToken
-                    ] = values;
+                if (statement.includes("set locked_until = cast(")) {
+                    const [leaseDuration, senderId, lockToken] = values;
                     const row = this.senderProcessing.get(senderId);
-                    if (!row || row.lock_token !== lockToken) {
+                    if (!hasActiveLease(senderId, lockToken)) {
                         return { meta: { changes: 0 } };
                     }
-                    row.locked_until = lockedUntil;
-                    row.last_activity_at = lastActivityAt;
+                    row.locked_until = Date.now() + leaseDuration;
+                    row.last_activity_at = Date.now();
                     return { meta: { changes: 1 } };
                 }
 
                 if (statement.includes("set last_event_timestamp = max")) {
                     const [
                         timestamp,
-                        lastActivityAt,
                         senderId,
                         lockToken
                     ] = values;
                     const row = this.senderProcessing.get(senderId);
-                    if (!row || row.lock_token !== lockToken) {
+                    if (!hasActiveLease(senderId, lockToken)) {
                         return { meta: { changes: 0 } };
                     }
                     row.last_event_timestamp = Math.max(
                         row.last_event_timestamp,
                         timestamp
                     );
-                    row.last_activity_at = lastActivityAt;
+                    row.last_activity_at = Date.now();
                     return { meta: { changes: 1 } };
                 }
 
@@ -275,12 +326,18 @@ class MemoryD1 {
             }
 
             if (statement.startsWith("delete from webhook_inbox")) {
-                const [cutoff] = values;
+                const [completedCutoff, failedCutoff] = values;
                 let changes = 0;
                 for (const [messageId, row] of this.inbox) {
                     if (
-                        row.status === "completed" &&
-                        row.completed_at < cutoff
+                        (
+                            row.status === "completed" &&
+                            row.completed_at < completedCutoff
+                        ) ||
+                        (
+                            row.status === "failed" &&
+                            row.failed_at < failedCutoff
+                        )
                     ) {
                         this.inbox.delete(messageId);
                         this.outbound.delete(messageId);
@@ -302,7 +359,9 @@ class MemoryD1 {
         };
 
         return {
+            sql: statement,
             bind: (...values) => ({
+                sql: statement,
                 first: () => execute("first", values),
                 all: () => execute("all", values),
                 run: () => execute("run", values)
@@ -314,6 +373,20 @@ class MemoryD1 {
         if (this.failNextBatch) {
             this.failNextBatch = false;
             throw new Error("simulated D1 batch failure");
+        }
+
+        if (
+            this.pauseNextOutboundBatch &&
+            statements.some(statement =>
+                statement.sql.startsWith(
+                    "insert or ignore into outbound_messages"
+                )
+            )
+        ) {
+            const pause = this.pauseNextOutboundBatch;
+            this.pauseNextOutboundBatch = null;
+            pause.onReached();
+            await pause.continue;
         }
 
         const snapshot = {
@@ -395,17 +468,38 @@ async function main() {
     const sentMessages = [];
     const originalFetch = globalThis.fetch;
     let failedSendsRemaining = 0;
+    const queuedSendResponses = [];
+    let pauseNextSend = null;
 
     globalThis.fetch = async (url, options) => {
+        const requestBody = JSON.parse(options.body);
+        const sentMessage = {
+            url: String(url),
+            ...requestBody
+        };
+
+        if (
+            pauseNextSend &&
+            sentMessage.recipient.id === pauseNextSend.senderId
+        ) {
+            const pause = pauseNextSend;
+            pauseNextSend = null;
+            pause.onReached();
+            await pause.continue;
+        }
+
         if (failedSendsRemaining > 0) {
             failedSendsRemaining--;
             return new Response("temporary send failure", { status: 503 });
         }
 
-        const sentMessage = {
-            url: String(url),
-            ...JSON.parse(options.body)
-        };
+        if (queuedSendResponses.length > 0) {
+            const queuedResponse = queuedSendResponses.shift();
+            return new Response(queuedResponse.body, {
+                status: queuedResponse.status
+            });
+        }
+
         sentMessages.push(sentMessage);
         return new Response(null, { status: 200 });
     };
@@ -543,6 +637,289 @@ async function main() {
         assert.equal(
             env.DB.conversations.get(senderIds[2]).state,
             "WAITING_FOR_PRINCIPAL"
+        );
+
+        const senderForFencing = senderIds[6];
+        const fencingStart = await worker.fetch(
+            await signedRequest(
+                senderForFencing,
+                "fencing-start",
+                "HI",
+                secret,
+                baseTimestamp + 700
+            ),
+            env
+        );
+        assert.equal(fencingStart.status, 200);
+
+        let notifyPausedBatch;
+        let releasePausedBatch;
+        const pausedBatchReached = new Promise(resolve => {
+            notifyPausedBatch = resolve;
+        });
+        const pausedBatchGate = new Promise(resolve => {
+            releasePausedBatch = resolve;
+        });
+        env.DB.pauseNextOutboundBatch = {
+            onReached: notifyPausedBatch,
+            continue: pausedBatchGate
+        };
+
+        const sentBeforeTakeover = sentMessages.length;
+        const staleWorkerRequest = await signedRequest(
+            senderForFencing,
+            "fencing-stale-amount",
+            "500000",
+            secret,
+            baseTimestamp + 701
+        );
+        const staleWorkerPromise = worker.fetch(staleWorkerRequest, env);
+        await pausedBatchReached;
+
+        const senderLock = env.DB.senderProcessing.get(senderForFencing);
+        assert.ok(senderLock?.lock_token);
+        senderLock.locked_until = 0;
+
+        const takeoverResponse = await worker.fetch(
+            await signedRequest(
+                senderForFencing,
+                "fencing-reset",
+                "RESET",
+                secret,
+                baseTimestamp + 702
+            ),
+            env
+        );
+        assert.equal(takeoverResponse.status, 200);
+
+        releasePausedBatch();
+        assert.equal((await staleWorkerPromise).status, 200);
+        assert.equal(
+            env.DB.conversations.get(senderForFencing).state,
+            "WAITING_FOR_PRINCIPAL",
+            "A stale lease owner must not overwrite the takeover's RESET."
+        );
+        assert.equal(
+            env.DB.inbox.get("fencing-stale-amount").status,
+            "completed"
+        );
+        assert.equal(env.DB.inbox.get("fencing-reset").status, "completed");
+        assert.equal(
+            sentMessages.length,
+            sentBeforeTakeover + 2,
+            "The stale owner must not send a reply after losing its lease."
+        );
+
+        const senderForStaleSend = senderIds[9];
+        await worker.fetch(
+            await signedRequest(
+                senderForStaleSend,
+                "stale-send-start",
+                "HI",
+                secret,
+                baseTimestamp + 705
+            ),
+            env
+        );
+
+        let notifyPausedSend;
+        let releasePausedSend;
+        const pausedSendReached = new Promise(resolve => {
+            notifyPausedSend = resolve;
+        });
+        const pausedSendGate = new Promise(resolve => {
+            releasePausedSend = resolve;
+        });
+        pauseNextSend = {
+            senderId: senderForStaleSend,
+            onReached: notifyPausedSend,
+            continue: pausedSendGate
+        };
+        const sentBeforeStaleSend = sentMessages.length;
+        const staleSendPromise = worker.fetch(
+            await signedRequest(
+                senderForStaleSend,
+                "stale-send-message",
+                "500000",
+                secret,
+                baseTimestamp + 706
+            ),
+            env
+        );
+        await pausedSendReached;
+
+        env.DB.senderProcessing.get(senderForStaleSend).locked_until = 0;
+        queuedSendResponses.push({
+            status: 503,
+            body: "takeover send failure"
+        });
+        let takeoverRetryTask;
+        await worker.scheduled({}, env, {
+            waitUntil(promise) {
+                takeoverRetryTask = promise;
+            }
+        });
+        await takeoverRetryTask;
+        assert.equal(
+            env.DB.inbox.get("stale-send-message").status,
+            "reply_pending"
+        );
+        assert.equal(
+            env.DB.outbound.get("stale-send-message").attempt_count,
+            1
+        );
+
+        releasePausedSend();
+        assert.equal((await staleSendPromise).status, 200);
+        assert.equal(
+            env.DB.inbox.get("stale-send-message").status,
+            "reply_pending",
+            "A stale send completion must not mark the message completed."
+        );
+        assert.equal(
+            env.DB.outbound.get("stale-send-message").status,
+            "pending"
+        );
+        assert.equal(
+            sentMessages.length,
+            sentBeforeStaleSend + 1,
+            "The paused request may have reached Meta despite losing its lease."
+        );
+
+        env.DB.outbound.get("stale-send-message").next_attempt_at = 0;
+        let staleSendRecoveryTask;
+        await worker.scheduled({}, env, {
+            waitUntil(promise) {
+                staleSendRecoveryTask = promise;
+            }
+        });
+        await staleSendRecoveryTask;
+        assert.equal(
+            env.DB.inbox.get("stale-send-message").status,
+            "completed"
+        );
+        assert.equal(
+            sentMessages.length,
+            sentBeforeStaleSend + 2,
+            "Recovery retains at-least-once delivery after a lost lease."
+        );
+
+        const senderForPermanentFailure = senderIds[7];
+        queuedSendResponses.push({
+            status: 400,
+            body: JSON.stringify({
+                error: {
+                    message: "Invalid recipient",
+                    code: 100,
+                    is_transient: false
+                }
+            })
+        });
+        const permanentFailureResponse = await worker.fetch(
+            await signedRequest(
+                senderForPermanentFailure,
+                "permanent-send-failure",
+                "HI",
+                secret,
+                baseTimestamp + 710
+            ),
+            env
+        );
+        assert.equal(permanentFailureResponse.status, 200);
+        assert.equal(
+            env.DB.inbox.get("permanent-send-failure").status,
+            "failed"
+        );
+        assert.equal(
+            env.DB.outbound.get("permanent-send-failure").status,
+            "failed"
+        );
+        assert.match(
+            env.DB.outbound.get("permanent-send-failure").last_error,
+            /400/
+        );
+
+        const resetAfterPermanentFailure = await worker.fetch(
+            await signedRequest(
+                senderForPermanentFailure,
+                "reset-after-permanent-failure",
+                "RESET",
+                secret,
+                baseTimestamp + 711
+            ),
+            env
+        );
+        assert.equal(resetAfterPermanentFailure.status, 200);
+        assert.equal(
+            env.DB.inbox.get("reset-after-permanent-failure").status,
+            "completed",
+            "A permanent send error must not block later messages."
+        );
+        assert.equal(
+            env.DB.conversations.get(senderForPermanentFailure).state,
+            "WAITING_FOR_PRINCIPAL"
+        );
+
+        const senderForRetryExhaustion = senderIds[8];
+        await worker.fetch(
+            await signedRequest(
+                senderForRetryExhaustion,
+                "retry-exhaustion-start",
+                "HI",
+                secret,
+                baseTimestamp + 720
+            ),
+            env
+        );
+        queuedSendResponses.push({
+            status: 503,
+            body: "temporary send failure"
+        });
+        await worker.fetch(
+            await signedRequest(
+                senderForRetryExhaustion,
+                "retry-exhaustion-message",
+                "500000",
+                secret,
+                baseTimestamp + 721
+            ),
+            env
+        );
+        env.DB.outbound.get("retry-exhaustion-message").attempt_count = 7;
+        env.DB.outbound.get("retry-exhaustion-message").next_attempt_at = 0;
+        queuedSendResponses.push({
+            status: 503,
+            body: "temporary send failure"
+        });
+
+        let exhaustedRetryTask;
+        await worker.scheduled({}, env, {
+            waitUntil(promise) {
+                exhaustedRetryTask = promise;
+            }
+        });
+        await exhaustedRetryTask;
+        assert.equal(
+            env.DB.inbox.get("retry-exhaustion-message").status,
+            "failed",
+            "Transient failures must reach a terminal state at the retry limit."
+        );
+
+        const resetAfterExhaustion = await worker.fetch(
+            await signedRequest(
+                senderForRetryExhaustion,
+                "reset-after-retry-exhaustion",
+                "RESET",
+                secret,
+                baseTimestamp + 722
+            ),
+            env
+        );
+        assert.equal(resetAfterExhaustion.status, 200);
+        assert.equal(
+            env.DB.inbox.get("reset-after-retry-exhaustion").status,
+            "completed",
+            "Exhausted retries must not block later messages."
         );
 
         const senderForPersistenceFailure = senderIds[4];
@@ -734,7 +1111,7 @@ async function main() {
 
     console.log(
         "Worker reliability simulation passed (16 senders, duplicate delivery, " +
-        "same-sender ordering, durable send retry, and access control)."
+        "same-sender ordering, lease fencing, bounded send retries, and access control)."
     );
 }
 

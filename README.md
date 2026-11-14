@@ -19,12 +19,21 @@ first persisted to a D1 inbox with a unique message ID. Conversation state
 changes and their intended replies are committed together with an outbound
 record. A per-sender lease serializes processing, and a one-minute Cron Trigger
 retries pending replies and recovers queued work after a Worker interruption.
+Every state transition and outbound status update is fenced by the sender's
+lock token and an unexpired lease checked by D1. The Worker renews the lease
+before sending; a process that loses ownership cannot commit its stale result.
 
 Outbound delivery is at-least-once. If Instagram accepts a reply but the
 Worker fails before it can record that success in D1, a later retry can send
 the reply again; the API does not provide a reliable idempotency guarantee for
-this operation. The inbox retains completed events for seven days. The older
-`processed_messages` table is retained for compatibility and periodic cleanup.
+this operation. Transient network errors, HTTP 408/425/429 and 5xx responses
+are retried with exponential backoff, up to eight send attempts. A Meta error
+marked `is_transient` is also retried. Other 4xx responses are treated as
+permanent. Permanent errors and exhausted retries are marked `failed`, logged
+with their error, and retained for seven days; they no longer block later
+messages from that sender. A sender cannot be notified through the same Send
+API when Meta rejects delivery. The older `processed_messages` table is
+retained for compatibility and periodic cleanup.
 
 ## Cloudflare configuration
 
@@ -60,9 +69,14 @@ the Worker runtime variables or in source control.
 The GitHub Actions build validates D1 migrations locally, then runs the
 WebAssembly, parser, Worker simulation, and browser tests. The Worker
 simulation uses an in-memory D1 substitute and intercepts outgoing `fetch`
-calls; it does not contact Cloudflare or Instagram. Pushes to this feature
-branch run validation only. The staging Worker is deployed only by a push to
-`develop`; this change has not been deployed.
+calls; it does not contact Cloudflare or Instagram. A successful pull request
+build targeting `develop` deploys the Instagram Worker to staging when the PR
+comes from this repository. A push to `develop` also deploys staging. Pull
+requests from forks run validation only because Cloudflare credentials are not
+available to them. PR deployments use the existing shared staging Worker and
+D1 database, so each deployment replaces the code currently being tested there;
+coordinate staging tests if multiple PRs are open. Production website
+deployment remains limited to pushes to `main`.
 
 ### Run the pre-push tests on Windows
 
@@ -101,6 +115,10 @@ sender IDs and checks that:
 - A failed database enqueue returns a retryable HTTP error.
 - A failed Instagram send leaves its reply pending and the scheduled retry
   sends it without applying the conversation transition again.
+- A paused Worker that loses its sender lease cannot overwrite a takeover's
+  conversation state or send a stale reply.
+- Permanent Send API errors and exhausted transient retries become terminal,
+  while later messages for that sender continue to process.
 - A sender outside the allow-list does not receive a reply or get a
   conversation stored.
 

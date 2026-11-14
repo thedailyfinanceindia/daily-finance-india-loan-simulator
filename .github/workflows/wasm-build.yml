@@ -119,8 +119,15 @@ jobs:
     name: Deploy Instagram Worker to Cloudflare Staging
 
     if: >
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/develop'
+      (
+        github.event_name == 'push' &&
+        github.ref == 'refs/heads/develop'
+      ) ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      )
 
     needs: build
     runs-on: ubuntu-latest
@@ -147,6 +154,7 @@ jobs:
           test -f cloudflare/worker/loan_worker.wasm
           test -f cloudflare/migrations/0002_processed_messages.sql
           test -f cloudflare/migrations/0003_webhook_reliability.sql
+          test -f cloudflare/migrations/0004_terminal_webhook_failures.sql
 
       - name: Apply staging D1 migrations
         uses: cloudflare/wrangler-action@v4

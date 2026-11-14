@@ -15,10 +15,20 @@ const COMPLETED_MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const SENDER_LOCK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SENDER_LOCK_MS = 2 * 60 * 1000;
 const SEND_TIMEOUT_MS = 10 * 1000;
+const MAX_OUTBOUND_ATTEMPTS = 8;
 const MAX_MESSAGES_PER_DRAIN = 10;
 const MAX_MESSAGES_PER_WEBHOOK_DRAIN = 2;
 const MAX_SENDERS_PER_SCHEDULED_RUN = 25;
 const REORDER_BUFFER_MS = 250;
+const SQLITE_NOW_MS =
+    "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+const ACTIVE_SENDER_LOCK_SQL = `
+    EXISTS (
+        SELECT 1 FROM sender_processing
+        WHERE sender_id = ? AND lock_token = ?
+            AND locked_until > ${SQLITE_NOW_MS}
+    )
+`;
 
 const STATE = {
     PRINCIPAL: "WAITING_FOR_PRINCIPAL",
@@ -139,6 +149,15 @@ function formatTenure(months) {
 // Instagram Send API
 // --------------------------------------------------
 
+class InstagramSendError extends Error {
+    constructor(message, status, permanent) {
+        super(message);
+        this.name = "InstagramSendError";
+        this.status = status;
+        this.permanent = permanent;
+    }
+}
+
 async function sendInstagramText(env, recipientId, text) {
     const url =
         `https://graph.facebook.com/${GRAPH_API_VERSION}/` +
@@ -159,14 +178,33 @@ async function sendInstagramText(env, recipientId, text) {
 
     if (!response.ok) {
         const errorBody = await response.text();
+        let graphError = null;
+
+        try {
+            graphError = JSON.parse(errorBody).error || null;
+        } catch {
+            // Non-JSON error bodies are classified from the HTTP status.
+        }
 
         console.error("Instagram Send API error:", {
             status: response.status,
             body: errorBody.slice(0, 1000)
         });
 
-        throw new Error(
-            `Instagram Send API failed: ${response.status}`
+        const transientStatus = [408, 425, 429].includes(response.status) ||
+            response.status >= 500;
+        const permanent = graphError?.is_transient !== true &&
+            !transientStatus;
+        const graphMessage = typeof graphError?.message === "string"
+            ? `: ${graphError.message.slice(0, 300)}`
+            : "";
+
+        throw new InstagramSendError(
+            `Instagram Send API failed: ${response.status}` +
+                (graphError?.code ? ` (code ${graphError.code})` : "") +
+                graphMessage,
+            response.status,
+            permanent
         );
     }
 }
@@ -579,12 +617,22 @@ async function persistWebhookMessages(env, messages, rawBody, receivedAt) {
     return Array.from(new Set(acceptedMessages.map(message => message.senderId)));
 }
 
-function buildConversationStatements(env, senderId, outcome) {
+function activeSenderLockStatement(env, senderId, lockToken) {
+    return env.DB.prepare(`
+        UPDATE sender_processing
+        SET locked_until = ${SQLITE_NOW_MS} + ?,
+            last_activity_at = ${SQLITE_NOW_MS}
+        WHERE sender_id = ? AND lock_token = ?
+            AND locked_until > ${SQLITE_NOW_MS}
+    `).bind(SENDER_LOCK_MS, senderId, lockToken);
+}
+
+function buildConversationStatements(env, senderId, outcome, lockToken) {
     if (outcome.deleteConversation) {
         return [env.DB.prepare(`
             DELETE FROM conversations
-            WHERE sender_id = ?
-        `).bind(senderId)];
+            WHERE sender_id = ? AND ${ACTIVE_SENDER_LOCK_SQL}
+        `).bind(senderId, senderId, lockToken)];
     }
 
     if (outcome.nextConversation) {
@@ -599,7 +647,8 @@ function buildConversationStatements(env, senderId, outcome) {
                 tenure_months,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            SELECT ?, ?, ?, ?, ?, ${SQLITE_NOW_MS}
+            WHERE ${ACTIVE_SENDER_LOCK_SQL}
             ON CONFLICT(sender_id) DO UPDATE SET
                 state = excluded.state,
                 principal = excluded.principal,
@@ -612,18 +661,24 @@ function buildConversationStatements(env, senderId, outcome) {
             conversation.principal,
             conversation.rate,
             conversation.tenureMonths,
-            Date.now()
+            senderId,
+            lockToken
         )];
     }
 
     return [];
 }
 
-async function prepareOutboundReply(env, inboxMessage, outcome) {
+async function prepareOutboundReply(env, inboxMessage, outcome, lockToken) {
     const statements = buildConversationStatements(
         env,
         inboxMessage.sender_id,
-        outcome
+        outcome,
+        lockToken
+    );
+
+    statements.unshift(
+        activeSenderLockStatement(env, inboxMessage.sender_id, lockToken)
     );
 
     statements.push(env.DB.prepare(`
@@ -634,24 +689,32 @@ async function prepareOutboundReply(env, inboxMessage, outcome) {
             status,
             created_at
         )
-        VALUES (?, ?, ?, 'pending', ?)
+        SELECT ?, ?, ?, 'pending', ${SQLITE_NOW_MS}
+        WHERE ${ACTIVE_SENDER_LOCK_SQL}
     `).bind(
         inboxMessage.message_id,
         inboxMessage.sender_id,
         outcome.reply,
-        Date.now()
+        inboxMessage.sender_id,
+        lockToken
     ));
 
     statements.push(env.DB.prepare(`
         UPDATE webhook_inbox
         SET status = 'reply_pending'
         WHERE message_id = ? AND status = 'queued'
-    `).bind(inboxMessage.message_id));
+            AND ${ACTIVE_SENDER_LOCK_SQL}
+    `).bind(
+        inboxMessage.message_id,
+        inboxMessage.sender_id,
+        lockToken
+    ));
 
-    await env.DB.batch(statements);
+    const results = await env.DB.batch(statements);
+    return results[0].meta?.changes === 1;
 }
 
-async function acquireSenderLock(env, senderId, lockToken, now) {
+async function acquireSenderLock(env, senderId, lockToken) {
     return env.DB.prepare(`
         INSERT INTO sender_processing (
             sender_id,
@@ -660,30 +723,23 @@ async function acquireSenderLock(env, senderId, lockToken, now) {
             last_event_timestamp,
             last_activity_at
         )
-        VALUES (?, ?, ?, 0, ?)
+        VALUES (?, ?, ${SQLITE_NOW_MS} + ?, 0, ${SQLITE_NOW_MS})
         ON CONFLICT(sender_id) DO UPDATE SET
             lock_token = excluded.lock_token,
             locked_until = excluded.locked_until,
             last_activity_at = excluded.last_activity_at
-        WHERE sender_processing.locked_until <= ?
+        WHERE sender_processing.locked_until <= ${SQLITE_NOW_MS}
         RETURNING last_event_timestamp
     `).bind(
         senderId,
         lockToken,
-        now + SENDER_LOCK_MS,
-        now,
-        now
+        SENDER_LOCK_MS
     ).first();
 }
 
 async function renewSenderLock(env, senderId, lockToken) {
-    const result = await env.DB.prepare(`
-        UPDATE sender_processing
-        SET locked_until = ?, last_activity_at = ?
-        WHERE sender_id = ? AND lock_token = ?
-    `).bind(
-        Date.now() + SENDER_LOCK_MS,
-        Date.now(),
+    const result = await activeSenderLockStatement(
+        env,
         senderId,
         lockToken
     ).run();
@@ -706,13 +762,18 @@ async function getNextSenderMessage(env, senderId) {
         LEFT JOIN outbound_messages AS outbound
             ON outbound.inbound_message_id = inbox.message_id
         WHERE inbox.sender_id = ?
-            AND inbox.status != 'completed'
+            AND inbox.status IN ('queued', 'reply_pending')
         ORDER BY inbox.event_timestamp, inbox.sequence
         LIMIT 1
     `).bind(senderId).first();
 }
 
-async function createPendingReply(env, inboxMessage, lastEventTimestamp) {
+async function createPendingReply(
+    env,
+    inboxMessage,
+    lastEventTimestamp,
+    lockToken
+) {
     let outcome;
 
     if (inboxMessage.event_timestamp < lastEventTimestamp) {
@@ -733,68 +794,137 @@ async function createPendingReply(env, inboxMessage, lastEventTimestamp) {
         }
     }
 
-    await prepareOutboundReply(env, inboxMessage, outcome);
+    return prepareOutboundReply(env, inboxMessage, outcome, lockToken);
 }
 
 async function markReplySent(env, inboxMessage, lockToken) {
-    const now = Date.now();
-
-    await env.DB.batch([
+    const results = await env.DB.batch([
+        activeSenderLockStatement(env, inboxMessage.sender_id, lockToken),
         env.DB.prepare(`
             UPDATE outbound_messages
-            SET status = 'sent', sent_at = ?, last_error = NULL
+            SET status = 'sent', sent_at = ${SQLITE_NOW_MS}, last_error = NULL
             WHERE inbound_message_id = ? AND status = 'pending'
-        `).bind(now, inboxMessage.message_id),
+                AND ${ACTIVE_SENDER_LOCK_SQL}
+        `).bind(
+            inboxMessage.message_id,
+            inboxMessage.sender_id,
+            lockToken
+        ),
         env.DB.prepare(`
             UPDATE webhook_inbox
-            SET status = 'completed', completed_at = ?, last_error = NULL
+            SET status = 'completed',
+                completed_at = ${SQLITE_NOW_MS},
+                last_error = NULL
             WHERE message_id = ? AND status = 'reply_pending'
-        `).bind(now, inboxMessage.message_id),
+                AND ${ACTIVE_SENDER_LOCK_SQL}
+        `).bind(
+            inboxMessage.message_id,
+            inboxMessage.sender_id,
+            lockToken
+        ),
         env.DB.prepare(`
             UPDATE sender_processing
             SET last_event_timestamp = MAX(last_event_timestamp, ?),
-                last_activity_at = ?
+                last_activity_at = ${SQLITE_NOW_MS}
             WHERE sender_id = ? AND lock_token = ?
+                AND locked_until > ${SQLITE_NOW_MS}
         `).bind(
             inboxMessage.event_timestamp,
-            now,
             inboxMessage.sender_id,
             lockToken
         )
     ]);
+
+    return results.every(result => result.meta?.changes === 1);
 }
 
-async function recordSendFailure(env, inboxMessage, error) {
+async function recordSendFailure(env, inboxMessage, error, lockToken) {
     const attemptCount = inboxMessage.attempt_count + 1;
-    const retryDelay = Math.min(
-        60 * 60 * 1000,
-        1000 * (2 ** Math.min(attemptCount, 12))
-    );
-    const nextAttemptAt = Date.now() + retryDelay;
+    const permanent = error instanceof InstagramSendError && error.permanent;
+    const terminal = permanent || attemptCount >= MAX_OUTBOUND_ATTEMPTS;
+    const failureType = permanent
+        ? "permanent"
+        : terminal
+            ? "retry_exhausted"
+            : "transient";
+    const status = terminal ? "failed" : "pending";
+    const nextAttemptAt = terminal
+        ? 0
+        : Date.now() + Math.min(
+            60 * 60 * 1000,
+            1000 * (2 ** Math.min(attemptCount, 12))
+        );
     const errorText = String(error).slice(0, 1000);
 
-    await env.DB.batch([
+    const statements = [
+        activeSenderLockStatement(env, inboxMessage.sender_id, lockToken),
         env.DB.prepare(`
             UPDATE outbound_messages
-            SET attempt_count = attempt_count + 1,
+            SET status = ?,
+                attempt_count = attempt_count + 1,
                 next_attempt_at = ?,
-                last_error = ?
+                last_error = ?,
+                failed_at = CASE WHEN ? = 1
+                    THEN ${SQLITE_NOW_MS} ELSE NULL END
             WHERE inbound_message_id = ? AND status = 'pending'
-        `).bind(nextAttemptAt, errorText, inboxMessage.message_id),
+                AND ${ACTIVE_SENDER_LOCK_SQL}
+        `).bind(
+            status,
+            nextAttemptAt,
+            errorText,
+            terminal ? 1 : 0,
+            inboxMessage.message_id,
+            inboxMessage.sender_id,
+            lockToken
+        ),
         env.DB.prepare(`
             UPDATE webhook_inbox
-            SET last_error = ?
+            SET status = ?,
+                last_error = ?,
+                failed_at = CASE WHEN ? = 1
+                    THEN ${SQLITE_NOW_MS} ELSE NULL END
             WHERE message_id = ? AND status = 'reply_pending'
-        `).bind(errorText, inboxMessage.message_id)
-    ]);
+                AND ${ACTIVE_SENDER_LOCK_SQL}
+        `).bind(
+            terminal ? "failed" : "reply_pending",
+            errorText,
+            terminal ? 1 : 0,
+            inboxMessage.message_id,
+            inboxMessage.sender_id,
+            lockToken
+        )
+    ];
 
-    console.error("Instagram reply delivery deferred:", {
+    if (terminal) {
+        statements.push(env.DB.prepare(`
+            UPDATE sender_processing
+            SET last_event_timestamp = MAX(last_event_timestamp, ?),
+                last_activity_at = ${SQLITE_NOW_MS}
+            WHERE sender_id = ? AND lock_token = ?
+                AND locked_until > ${SQLITE_NOW_MS}
+        `).bind(
+            inboxMessage.event_timestamp,
+            inboxMessage.sender_id,
+            lockToken
+        ));
+    }
+
+    const results = await env.DB.batch(statements);
+
+    if (!results.every(result => result.meta?.changes === 1)) {
+        return { recorded: false, terminal: false };
+    }
+
+    console.error("Instagram reply delivery failure recorded:", {
         senderId: inboxMessage.sender_id,
         messageId: inboxMessage.message_id,
         attemptCount,
-        nextAttemptAt,
+        failureType,
+        nextAttemptAt: terminal ? null : nextAttemptAt,
         error: errorText
     });
+
+    return { recorded: true, terminal };
 }
 
 async function drainSenderQueue(
@@ -808,7 +938,7 @@ async function drainSenderQueue(
     }
 
     const lockToken = crypto.randomUUID();
-    const lock = await acquireSenderLock(env, senderId, lockToken, Date.now());
+    const lock = await acquireSenderLock(env, senderId, lockToken);
 
     if (!lock) return;
 
@@ -832,7 +962,13 @@ async function drainSenderQueue(
 
                 if (inboxMessage.next_attempt_at > Date.now()) return;
             } else {
-                await createPendingReply(env, inboxMessage, lastEventTimestamp);
+                const prepared = await createPendingReply(
+                    env,
+                    inboxMessage,
+                    lastEventTimestamp,
+                    lockToken
+                );
+                if (!prepared) return;
 
                 const pending = await getNextSenderMessage(env, senderId);
                 if (!pending || pending.message_id !== inboxMessage.message_id) {
@@ -846,6 +982,10 @@ async function drainSenderQueue(
                 inboxMessage.status = pending.status;
             }
 
+            if (!await renewSenderLock(env, senderId, lockToken)) {
+                return;
+            }
+
             try {
                 await sendInstagramText(
                     env,
@@ -853,11 +993,23 @@ async function drainSenderQueue(
                     inboxMessage.reply_text
                 );
             } catch (error) {
-                await recordSendFailure(env, inboxMessage, error);
-                return;
+                const failure = await recordSendFailure(
+                    env,
+                    inboxMessage,
+                    error,
+                    lockToken
+                );
+                if (!failure.recorded || !failure.terminal) return;
+                lastEventTimestamp = Math.max(
+                    lastEventTimestamp,
+                    inboxMessage.event_timestamp
+                );
+                continue;
             }
 
-            await markReplySent(env, inboxMessage, lockToken);
+            if (!await markReplySent(env, inboxMessage, lockToken)) {
+                return;
+            }
             lastEventTimestamp = Math.max(
                 lastEventTimestamp,
                 inboxMessage.event_timestamp
@@ -899,8 +1051,12 @@ async function retryPendingMessages(env) {
     await env.DB.batch([
         env.DB.prepare(`
             DELETE FROM webhook_inbox
-            WHERE status = 'completed' AND completed_at < ?
-        `).bind(now - COMPLETED_MESSAGE_RETENTION_MS),
+            WHERE (status = 'completed' AND completed_at < ?)
+                OR (status = 'failed' AND failed_at < ?)
+        `).bind(
+            now - COMPLETED_MESSAGE_RETENTION_MS,
+            now - COMPLETED_MESSAGE_RETENTION_MS
+        ),
         env.DB.prepare(`
             DELETE FROM sender_processing
             WHERE locked_until = 0
