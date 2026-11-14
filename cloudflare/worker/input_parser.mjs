@@ -2,13 +2,29 @@ export const MAX_PRINCIPAL = 1_000_000_000;
 export const MAX_ANNUAL_RATE = 100;
 export const MAX_TENURE_MONTHS = 600;
 
-export function parsePrincipal(text) {
-    const normalized = String(text)
-        .toLowerCase()
-        .replace(/₹/g, "")
-        .trim();
+const PRINCIPAL_MULTIPLIERS = Object.freeze({
+    "": 1,
+    k: 1_000,
+    thousand: 1_000,
+    l: 100_000,
+    lac: 100_000,
+    lacs: 100_000,
+    lakh: 100_000,
+    lakhs: 100_000,
+    cr: 10_000_000,
+    crore: 10_000_000,
+    crores: 10_000_000
+});
 
-    // Commas are deliberately not accepted.
+export function parsePrincipal(text) {
+    if (typeof text !== "string") return null;
+
+    const normalized = text
+        .replace(/₹/g, "")
+        .trim()
+        .toLowerCase();
+
+    // Do not silently remove commas or other unsupported characters.
     const match = normalized.match(
         /^(\d+(?:\.\d+)?)\s*(k|thousand|l|lac|lacs|lakh|lakhs|cr|crore|crores)?$/
     );
@@ -17,22 +33,7 @@ export function parsePrincipal(text) {
 
     const value = Number(match[1]);
     const unit = match[2] || "";
-
-    const multipliers = {
-        "": 1,
-        "k": 1_000,
-        "thousand": 1_000,
-        "l": 100_000,
-        "lac": 100_000,
-        "lacs": 100_000,
-        "lakh": 100_000,
-        "lakhs": 100_000,
-        "cr": 10_000_000,
-        "crore": 10_000_000,
-        "crores": 10_000_000
-    };
-
-    const amount = value * multipliers[unit];
+    const amount = value * PRINCIPAL_MULTIPLIERS[unit];
 
     if (
         !Number.isFinite(amount) ||
@@ -46,7 +47,9 @@ export function parsePrincipal(text) {
 }
 
 export function parseRate(text) {
-    const normalized = String(text).trim().replace(/%/g, "").trim();
+    if (typeof text !== "string") return null;
+
+    const normalized = text.trim().replace(/%/g, "").trim();
 
     if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null;
 
@@ -64,7 +67,9 @@ export function parseRate(text) {
 }
 
 export function parseTenure(text) {
-    const normalized = String(text).toLowerCase().trim();
+    if (typeof text !== "string") return null;
+
+    const normalized = text.toLowerCase().trim();
 
     const match = normalized.match(
         /^(\d+)\s*(months?|mos?|years?|yrs?)?$/
