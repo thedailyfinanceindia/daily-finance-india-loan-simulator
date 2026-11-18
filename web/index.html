@@ -24,6 +24,7 @@
         </section>
 
         <section class="calculator">
+            <h2>New Loan EMI Calculator</h2>
             <form id="loan-form" novalidate>
                 <div class="field">
                     <label for="principal">Loan amount (₹)</label>
@@ -71,12 +72,11 @@
             </div>
         </section>
 
-        <section class="scenario-planner" aria-labelledby="scenario-heading">
+        <section class="scenario-planner existing-loan" aria-labelledby="scenario-heading">
             <p class="eyebrow">EXISTING LOAN WHAT-IF</p>
-            <h2 id="scenario-heading">Rate changes and prepayments</h2>
+            <h2 id="scenario-heading">Existing Loan What-If</h2>
             <p class="scenario-intro">
-                Use your current outstanding balance, EMI and remaining term to
-                compare rate revisions or planned prepayments.
+                Already have a loan? Use your current outstanding balance, EMI and remaining tenure to understand the impact of interest-rate changes.
             </p>
 
             <div class="scenario-input-grid">
@@ -118,8 +118,40 @@
                      hidden></div>
             </section>
 
-            <section class="scenario-section" aria-labelledby="prepayment-heading">
-                <h3 id="prepayment-heading">Planned prepayments</h3>
+            <p id="simulation-error" class="error" role="alert"></p>
+        </section>
+
+        <section class="scenario-planner prepayment-planner" aria-labelledby="prepayment-heading">
+            <p class="eyebrow">PLANNED PREPAYMENTS</p>
+            <h2 id="prepayment-heading">Planned Prepayments</h2>
+            <p class="scenario-intro">
+                Calculate the impact of lump-sum or recurring prepayments on an outstanding loan.
+            </p>
+
+            <div class="scenario-input-grid">
+                <div class="field">
+                    <label for="prepayment-outstanding-balance">Outstanding balance (₹)</label>
+                    <input id="prepayment-outstanding-balance" type="number" min="0.01"
+                           max="1000000000" value="5000000" step="0.01" required>
+                </div>
+                <div class="field">
+                    <label for="prepayment-interest-rate">Annual interest rate (%)</label>
+                    <input id="prepayment-interest-rate" type="number" min="0" max="100"
+                           value="8.5" step="0.01" required>
+                </div>
+                <div class="field">
+                    <label for="prepayment-emi">Monthly EMI (₹)</label>
+                    <input id="prepayment-emi" type="number" min="0.01"
+                           value="43391.16" step="0.01" required>
+                </div>
+                <div class="field">
+                    <label for="prepayment-tenure">Remaining tenure (months)</label>
+                    <input id="prepayment-tenure" type="number" min="1" max="600"
+                           value="240" step="1" required>
+                </div>
+            </div>
+
+            <section class="scenario-section" aria-label="Prepayment schedule">
                 <p class="field-help">
                     Each extra payment is applied after that installment's regular EMI.
                 </p>
@@ -156,7 +188,7 @@
                      aria-live="polite" hidden></div>
             </section>
 
-            <p id="simulation-error" class="error" role="alert"></p>
+            <p id="prepayment-error" class="error" role="alert"></p>
         </section>
 
         <section class="disclaimer">

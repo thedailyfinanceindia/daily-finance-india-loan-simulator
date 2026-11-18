@@ -1,6 +1,7 @@
 const projectionStatusText = {
     completed: "Paid off",
-    non_amortizing: "This EMI does not reduce the balance",
+    non_amortizing:
+        "Warning: EMI does not cover monthly interest; the balance will not decrease",
     term_exhausted: "Balance remains at the end of the stated term",
     maximum_tenure_exceeded: "Not paid off within 600 installments"
 };
@@ -37,7 +38,12 @@ export function formatSignedMonths(value, suffix) {
     return `${sign}${Math.abs(value)} ${suffix}`;
 }
 
-export function createProjectionCard(title, projection, additionalMetrics = []) {
+export function createProjectionCard(
+    title,
+    projection,
+    additionalMetrics = [],
+    labels = {}
+) {
     const card = document.createElement("article");
     card.className = "scenario-card";
 
@@ -51,15 +57,37 @@ export function createProjectionCard(title, projection, additionalMetrics = []) 
         projectionStatusText[projection.status] || "Simulation unavailable";
     card.append(status);
 
-    if (projection.installments > 0) {
-        addMetric(card, "Installments", String(projection.installments));
+    const installmentsLabel =
+        labels.installments || "Number of installments required";
+    if (projection.status === "completed") {
+        addMetric(
+            card,
+            installmentsLabel,
+            labels.installments
+                ? `${projection.installments} months`
+                : String(projection.installments)
+        );
+    } else if (labels.installments) {
+        addMetric(card, installmentsLabel, "Unavailable");
     }
-    addMetric(card, "Starting EMI", formatINR(projection.initialEmi));
+    addMetric(
+        card,
+        labels.emi || "Starting EMI",
+        formatINR(projection.initialEmi)
+    );
     if (Math.abs(projection.lastEmi - projection.initialEmi) >= 0.005) {
         addMetric(card, "EMI after latest change", formatINR(projection.lastEmi));
     }
-    addMetric(card, "Total interest", formatINR(projection.totalInterest));
-    addMetric(card, "Total repayment", formatINR(projection.totalRepayment));
+    addMetric(
+        card,
+        "Projected Future Interest",
+        formatINR(projection.totalInterest)
+    );
+    addMetric(
+        card,
+        "Projected Future Repayment",
+        formatINR(projection.totalRepayment)
+    );
 
     if (projection.totalPrepaymentsRequested > 0) {
         addMetric(

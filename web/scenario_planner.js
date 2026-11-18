@@ -1,5 +1,6 @@
 import {
     createProjectionCard,
+    formatINR,
     formatSignedCurrency,
     formatSignedMonths,
     showScenarioError
@@ -59,9 +60,58 @@ function readSnapshot() {
     };
 }
 
+function readPrepaymentSnapshot() {
+    const outstandingBalance = Number(
+        document.getElementById("prepayment-outstanding-balance").value
+    );
+    const annualInterestRateInput =
+        document.getElementById("prepayment-interest-rate").value.trim();
+    const annualInterestRate = annualInterestRateInput === ""
+        ? Number.NaN
+        : Number(annualInterestRateInput);
+    const currentEmi = Number(
+        document.getElementById("prepayment-emi").value
+    );
+    const remainingTenureMonths = Number(
+        document.getElementById("prepayment-tenure").value
+    );
+
+    if (
+        !Number.isFinite(outstandingBalance) ||
+        outstandingBalance <= 0 ||
+        outstandingBalance > 1_000_000_000
+    ) {
+        throw new Error("Enter a valid prepayment outstanding balance.");
+    }
+    if (
+        !Number.isFinite(annualInterestRate) ||
+        annualInterestRate < 0 ||
+        annualInterestRate > 100
+    ) {
+        throw new Error("Enter a prepayment rate between 0 and 100%.");
+    }
+    if (!Number.isFinite(currentEmi) || currentEmi <= 0) {
+        throw new Error("Enter a valid prepayment monthly EMI.");
+    }
+    if (
+        !Number.isInteger(remainingTenureMonths) ||
+        remainingTenureMonths < 1 ||
+        remainingTenureMonths > MAX_TENURE_MONTHS
+    ) {
+        throw new Error("Prepayment remaining tenure must be 1 to 600 whole months.");
+    }
+
+    return {
+        outstandingBalance,
+        annualInterestRate,
+        currentEmi,
+        remainingTenureMonths
+    };
+}
+
 function updatePrepaymentInputs(prepaymentEvents) {
     const remaining = Number(
-        document.getElementById("remaining-tenure").value
+        document.getElementById("prepayment-tenure").value
     );
 
     for (const input of prepaymentEvents.querySelectorAll(
@@ -187,23 +237,62 @@ function renderRateRevision(loanCalculator, rateResults) {
             snapshot.remainingTenureMonths,
             revisedRate
         );
+        const baselineAdditionalMetrics = [
+            [
+                "Contractual remaining tenure",
+                `${snapshot.remainingTenureMonths} months`
+            ],
+            [
+                "Outstanding principal",
+                formatINR(snapshot.outstandingBalance)
+            ],
+            [
+                "Current annual interest rate",
+                `${snapshot.annualInterestRate}%`
+            ]
+        ];
+        if (
+            simulation.baseline.status === "completed" &&
+            Math.abs(
+                simulation.baseline.installments -
+                snapshot.remainingTenureMonths
+            ) > 1
+        ) {
+            baselineAdditionalMetrics.push([
+                "Input consistency warning",
+                `Calculated payoff is ${simulation.baseline.installments} months, but contractual remaining tenure is ${snapshot.remainingTenureMonths} months.`
+            ]);
+        }
         rateResults.append(
-            createProjectionCard("Current loan baseline", simulation.baseline),
+            createProjectionCard(
+                "Current loan baseline",
+                simulation.baseline,
+                baselineAdditionalMetrics,
+                {
+                    emi: "Monthly EMI",
+                    installments: "Projected payoff tenure"
+                }
+            ),
             createProjectionCard(
                 "Revised rate, keep EMI",
                 simulation.keepEmi,
                 [
                     optionalMetric(
-                        "Term change vs remaining term",
+                        "Change in tenure vs baseline",
                         simulation.keepEmiTermChangeMonths,
                         value => formatSignedMonths(value, "months")
                     ),
                     optionalMetric(
-                        "Interest change vs baseline",
+                        "Change in future interest vs baseline",
                         simulation.keepEmiInterestChange,
                         formatSignedCurrency
-                    )
-                ]
+                    ),
+                    ["Revised annual interest rate", `${revisedRate}%`]
+                ],
+                {
+                    emi: "Monthly EMI",
+                    installments: "Projected payoff tenure"
+                }
             ),
             createProjectionCard(
                 "Revised rate, keep tenure",
@@ -215,11 +304,13 @@ function renderRateRevision(loanCalculator, rateResults) {
                         formatSignedCurrency
                     ),
                     optionalMetric(
-                        "Interest change vs baseline",
+                        "Change in future interest vs baseline",
                         simulation.keepTenureInterestChange,
                         formatSignedCurrency
-                    )
-                ]
+                    ),
+                    ["Revised annual interest rate", `${revisedRate}%`]
+                ],
+                { emi: "Monthly EMI" }
             )
         );
         rateResults.hidden = false;
@@ -229,12 +320,13 @@ function renderRateRevision(loanCalculator, rateResults) {
 }
 
 function renderPrepayments(loanCalculator, prepaymentEvents, results) {
-    document.getElementById("simulation-error").textContent = "";
+    const prepaymentError = document.getElementById("prepayment-error");
+    prepaymentError.textContent = "";
     results.replaceChildren();
     results.hidden = true;
 
     try {
-        const snapshot = readSnapshot();
+        const snapshot = readPrepaymentSnapshot();
         const events = readPrepaymentEvents(
             prepaymentEvents,
             snapshot.remainingTenureMonths
@@ -283,7 +375,8 @@ function renderPrepayments(loanCalculator, prepaymentEvents, results) {
         );
         results.hidden = false;
     } catch (error) {
-        showScenarioError(error);
+        prepaymentError.textContent =
+            error.message || "Unable to run the prepayment scenario.";
     }
 }
 
@@ -301,8 +394,9 @@ export function initializeScenarioPlanner() {
         "simulate-prepayment-button"
     );
     let loanCalculator = null;
+    let rateComparisonRequested = false;
 
-    document.getElementById("remaining-tenure").addEventListener(
+    document.getElementById("prepayment-tenure").addEventListener(
         "input",
         () => updatePrepaymentInputs(prepaymentEvents)
     );
@@ -313,7 +407,7 @@ export function initializeScenarioPlanner() {
             )?.value
         ) || 0;
         const remaining = Number(
-            document.getElementById("remaining-tenure").value
+            document.getElementById("prepayment-tenure").value
         );
         const nextInstallment =
             Number.isInteger(remaining) && remaining > 0
@@ -328,8 +422,22 @@ export function initializeScenarioPlanner() {
         }
     });
     simulateRateButton.addEventListener("click", () => {
+        rateComparisonRequested = true;
         renderRateRevision(loanCalculator, rateResults);
     });
+    for (const inputId of [
+        "outstanding-balance",
+        "current-interest-rate",
+        "current-emi",
+        "remaining-tenure",
+        "revised-interest-rate"
+    ]) {
+        document.getElementById(inputId).addEventListener("input", () => {
+            if (rateComparisonRequested) {
+                renderRateRevision(loanCalculator, rateResults);
+            }
+        });
+    }
     simulatePrepaymentButton.addEventListener("click", () => {
         renderPrepayments(
             loanCalculator,

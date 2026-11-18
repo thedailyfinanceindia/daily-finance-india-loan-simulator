@@ -259,10 +259,11 @@ RateRevisionSimulation LoanAmortizationSimulator::simulateRateRevision(
         true
     );
 
-    if (result.keepEmi.status == ProjectionStatus::Completed) {
+    if (result.baseline.status == ProjectionStatus::Completed &&
+        result.keepEmi.status == ProjectionStatus::Completed) {
         result.keepEmiTermChangeMonths =
             static_cast<int>(result.keepEmi.installments) -
-            static_cast<int>(loan.remainingTenureMonths);
+            static_cast<int>(result.baseline.installments);
     }
     setInterestChange(
         result.baseline,
@@ -302,11 +303,11 @@ PrepaymentSimulation LoanAmortizationSimulator::simulatePrepayments(
         loan.outstandingBalance,
         loan.annualInterestRate,
         loan.currentEmi,
-        MAX_TENURE_MONTHS,
+        loan.remainingTenureMonths,
         {},
         0.0L,
         false,
-        false
+        true
     );
     result.reduceTenure = project(
         loan.outstandingBalance,

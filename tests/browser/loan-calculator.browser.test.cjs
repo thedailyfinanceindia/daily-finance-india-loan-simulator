@@ -85,6 +85,9 @@ async function main() {
             state: "visible"
         });
         assert.equal(await page.locator("#rate-results .scenario-card").count(), 3);
+        const baselineResults = await page.locator(
+            "#rate-results .scenario-card"
+        ).first().innerText();
         const keepEmiResults = await page.locator(
             "#rate-results .scenario-card"
         ).nth(1).innerText();
@@ -93,11 +96,61 @@ async function main() {
         ).nth(2).innerText();
         assert.match(keepEmiResults, /64/);
         assert.match(keepTenureResults, /₹22,244\.45/);
+        assert.match(baselineResults, /Outstanding principal\s+₹10,00,000\.00/);
+        assert.match(baselineResults, /Current annual interest rate\s+10%/);
+        assert.match(baselineResults, /Contractual remaining tenure\s+60 months/);
+        assert.match(baselineResults, /Projected Future Interest/);
+        assert.match(baselineResults, /Projected Future Repayment/);
+        assert.doesNotMatch(
+            await page.locator("#rate-results").innerText(),
+            /Total interest|Total repayment/
+        );
+        assert.match(keepEmiResults, /Projected payoff tenure\s+64 months/);
+        assert.match(
+            keepEmiResults,
+            /Change in tenure vs baseline\s+\+4 months/
+        );
         assert.match(
             await page.locator("#rate-results").innerText(),
             /Revised rate, keep tenure/
         );
 
+        await page.locator("#revised-interest-rate").fill("11");
+        assert.match(
+            await page.locator("#rate-results .scenario-card").nth(1).innerText(),
+            /Revised annual interest rate\s+11%/
+        );
+        await page.locator("#outstanding-balance").fill("2000000");
+        assert.match(
+            await page.locator("#rate-results .scenario-card").first().innerText(),
+            /Outstanding principal\s+₹20,00,000\.00/
+        );
+        await page.locator("#outstanding-balance").fill("1000000");
+        await page.locator("#revised-interest-rate").fill("12");
+
+        await page.locator("#outstanding-balance").fill("3500000");
+        await page.locator("#current-interest-rate").fill("8.5");
+        await page.locator("#current-emi").fill("45000");
+        await page.locator("#remaining-tenure").fill("240");
+        await page.locator("#revised-interest-rate").fill("8.5");
+        await page.locator("#simulate-rate-button").click();
+        const screenshotBaseline = await page.locator(
+            "#rate-results .scenario-card"
+        ).first().innerText();
+        assert.match(screenshotBaseline, /Projected payoff tenure\s+114 months/);
+        assert.match(screenshotBaseline, /Contractual remaining tenure\s+240 months/);
+        assert.match(screenshotBaseline, /Calculated payoff is 114 months/);
+
+        await page.locator("#outstanding-balance").fill("1000000");
+        await page.locator("#current-interest-rate").fill("10");
+        await page.locator("#current-emi").fill("21247.044711268275");
+        await page.locator("#remaining-tenure").fill("60");
+        await page.locator("#revised-interest-rate").fill("12");
+
+        await page.locator("#prepayment-outstanding-balance").fill("1000000");
+        await page.locator("#prepayment-interest-rate").fill("10");
+        await page.locator("#prepayment-emi").fill("21247.044711268275");
+        await page.locator("#prepayment-tenure").fill("60");
         await page.locator("#add-prepayment-button").click();
         const prepaymentRows = page.locator(
             "#prepayment-events .prepayment-event"
@@ -123,19 +176,22 @@ async function main() {
         const reduceEmiResults = await page.locator(
             "#prepayment-results .scenario-card"
         ).nth(2).innerText();
-        assert.match(reduceTenureResults, /Installments\s+51/);
+        assert.match(
+            reduceTenureResults,
+            /Number of installments required\s+51/
+        );
         assert.match(reduceTenureResults, /₹2,16,317\.95/);
         assert.match(reduceEmiResults, /₹2,45,001\.35/);
         await prepaymentRows.nth(1).locator(".remove-prepayment-button").click();
         assert.equal(await prepaymentRows.count(), 1);
 
-        await page.locator("#remaining-tenure").fill("11");
+        await page.locator("#prepayment-tenure").fill("11");
         await page.locator("#simulate-prepayment-button").click();
         assert.match(
-            await page.locator("#simulation-error").innerText(),
+            await page.locator("#prepayment-error").innerText(),
             /within the remaining term/
         );
-        await page.locator("#remaining-tenure").fill("240");
+        await page.locator("#prepayment-tenure").fill("240");
 
         await page.locator("#current-interest-rate").fill("");
         await page.locator("#simulate-rate-button").click();
@@ -173,12 +229,33 @@ async function main() {
 
         assert.match(zeroRateEmi, /20,833/);
 
+        const existingBaselineBeforeNewLoan =
+            await page.locator("#rate-results .scenario-card").first().innerText();
+        await page.locator("#principal").fill("6000000");
+        await button.click();
+        const independentEmi = await page.locator("#monthly-emi").innerText();
+        assert.notEqual(independentEmi, zeroRateEmi);
+        assert.equal(
+            await page.locator("#rate-results .scenario-card").first().innerText(),
+            existingBaselineBeforeNewLoan
+        );
+
         await page.locator("#interest-rate").fill("101");
         await button.click();
 
         const error = await page.locator("#error-message").innerText();
 
         assert.match(error, /between 0 and 100/);
+
+        await page.setViewportSize({ width: 390, height: 844 });
+        const mobileLayout = await page.evaluate(() => ({
+            documentFits: document.documentElement.scrollWidth <= window.innerWidth,
+            numericalWhiteSpace: Array.from(
+                document.querySelectorAll(".scenario-metric strong")
+            ).every(element => getComputedStyle(element).whiteSpace === "nowrap")
+        }));
+        assert.equal(mobileLayout.documentFits, true);
+        assert.equal(mobileLayout.numericalWhiteSpace, true);
         assert.deepEqual(errors, []);
 
         console.log("PASS: Default EMI calculation");
