@@ -11,6 +11,10 @@ calculator and an Instagram messaging Worker for guided EMI calculations.
   WebAssembly loan engine.
 - `cloudflare/migrations/`: D1 database migrations.
 - `tests/`: C++, browser, WebAssembly, parser, and Worker simulation tests.
+- [`docs/web-architecture.md`](docs/web-architecture.md): in-depth browser and
+  WebAssembly architecture guide.
+- [`docs/instagram-instabot-architecture.md`](docs/instagram-instabot-architecture.md):
+  in-depth Instagram conversation, D1, retry, and deployment guide.
 
 The Worker entry point in `cloudflare/worker/index.js` handles webhook and
 scheduled requests. Conversation rules, D1 persistence, queued message
@@ -62,6 +66,9 @@ The Instagram bot supports two guided DM journeys:
 
 Send `1` or `2` from the main menu. Send `MENU` to return to the main menu,
 `RESET` to restart, and `CANCEL` to stop. `HELP` shows the supported entries.
+`HI`, `HELLO`, `MENU`, and `RESET` all show the main menu; `HI` does not enter a
+calculation directly. After a new-loan result, the bot offers another new loan,
+existing-loan analysis, or the main menu.
 Each Instagram sender has an independent D1-backed conversation. Individual
 prepayment amounts and the cumulative plan must be positive and cannot exceed
 the supplied outstanding balance. Installment numbers must be within the

@@ -64,11 +64,36 @@ async function verifyConcurrentDeliveryAndOrdering(context) {
     for (const senderId of senderIds) {
         assert.equal(
             env.DB.conversations.get(senderId).state,
-            "WAITING_FOR_PRINCIPAL"
+            "WAITING_FOR_MAIN_MENU"
         );
         assert.ok(
             sentMessages.some(message => message.recipient.id === senderId),
             `Expected a reply for ${senderId}.`
+        );
+    }
+    assert.match(
+        env.DB.outbound.get("start-0").message_text,
+        /Welcome to Daily Finance India!/
+    );
+    assert.match(
+        env.DB.outbound.get("start-0").message_text,
+        /Reply with 1 or 2/
+    );
+
+    for (const [index, senderId] of senderIds.entries()) {
+        await worker.fetch(
+            await signedRequest(
+                senderId,
+                `start-new-loan-${index}`,
+                "1",
+                secret,
+                baseTimestamp + 50 + index
+            ),
+            env
+        );
+        assert.equal(
+            env.DB.conversations.get(senderId).state,
+            "WAITING_FOR_PRINCIPAL"
         );
     }
 
@@ -180,6 +205,23 @@ async function verifyConcurrentDeliveryAndOrdering(context) {
         env.DB.conversations.get(senderIds[2]).state,
         "WAITING_FOR_MAIN_MENU"
     );
+
+    for (const [index, greeting] of ["HELLO", "HI", "MENU"].entries()) {
+        await worker.fetch(
+            await signedRequest(
+                senderIds[2],
+                `main-menu-${index}`,
+                greeting,
+                secret,
+                baseTimestamp + 310 + index
+            ),
+            env
+        );
+        assert.equal(
+            env.DB.conversations.get(senderIds[2]).state,
+            "WAITING_FOR_MAIN_MENU"
+        );
+    }
 }
 
 async function verifyExistingLoanFlows(context) {
@@ -233,14 +275,18 @@ async function verifyExistingLoanFlows(context) {
         env.DB.outbound.get("position-5").message_text,
         /Projected Future Interest/
     );
+    assert.match(
+        env.DB.outbound.get("position-5").message_text,
+        /Contractual Remaining Tenure/
+    );
+    assert.match(
+        env.DB.outbound.get("position-5").message_text,
+        /Calculated Payoff Tenure/
+    );
 
     for (const [messageId, text] of [
         ["rate-1", "2"],
-        ["rate-2", "1000000"],
-        ["rate-3", "10"],
-        ["rate-4", "21247.044711268275"],
-        ["rate-5", "60"],
-        ["rate-6", "12"]
+        ["rate-2", "12"]
     ]) {
         const response = await worker.fetch(
             await signedRequest(
@@ -255,22 +301,18 @@ async function verifyExistingLoanFlows(context) {
         assert.equal(response.status, 200);
     }
     assert.match(
-        env.DB.outbound.get("rate-6").message_text,
+        env.DB.outbound.get("rate-2").message_text,
         /Scenario A - Keep EMI unchanged/
     );
     assert.match(
-        env.DB.outbound.get("rate-6").message_text,
+        env.DB.outbound.get("rate-2").message_text,
         /Scenario B - Keep remaining tenure unchanged/
     );
 
     for (const [messageId, text] of [
         ["prepay-1", "3"],
-        ["prepay-2", "1000000"],
-        ["prepay-3", "10"],
-        ["prepay-4", "21247.044711268275"],
-        ["prepay-5", "60"],
-        ["prepay-6", "100000, 12"],
-        ["prepay-7", "DONE"]
+        ["prepay-2", "100000, 12"],
+        ["prepay-3", "DONE"]
     ]) {
         const response = await worker.fetch(
             await signedRequest(
@@ -285,11 +327,11 @@ async function verifyExistingLoanFlows(context) {
         assert.equal(response.status, 200);
     }
     assert.match(
-        env.DB.outbound.get("prepay-7").message_text,
+        env.DB.outbound.get("prepay-3").message_text,
         /Strategy A - Reduce tenure/
     );
     assert.match(
-        env.DB.outbound.get("prepay-7").message_text,
+        env.DB.outbound.get("prepay-3").message_text,
         /Strategy B - Reduce EMI/
     );
 }
@@ -311,6 +353,16 @@ async function verifyLeaseFencing(context) {
         env
     );
     assert.equal(fencingStart.status, 200);
+    await worker.fetch(
+        await signedRequest(
+            senderForFencing,
+            "fencing-select-new",
+            "1",
+            secret,
+            baseTimestamp + 700
+        ),
+        env
+    );
 
     let notifyPausedBatch;
     let releasePausedBatch;
@@ -376,6 +428,16 @@ async function verifyLeaseFencing(context) {
             senderForStaleSend,
             "stale-send-start",
             "HI",
+            secret,
+            baseTimestamp + 705
+        ),
+        env
+    );
+    await worker.fetch(
+        await signedRequest(
+            senderForStaleSend,
+            "stale-send-select-new",
+            "1",
             secret,
             baseTimestamp + 705
         ),
@@ -536,6 +598,16 @@ async function verifyTerminalDeliveryFailures(context) {
         ),
         env
     );
+    await worker.fetch(
+        await signedRequest(
+            senderForRetryExhaustion,
+            "retry-exhaustion-select-new",
+            "1",
+            secret,
+            baseTimestamp + 720
+        ),
+        env
+    );
     queuedSendResponses.push({
         status: 503,
         body: "temporary send failure"
@@ -624,6 +696,26 @@ async function verifyPendingReplyRecovery(context) {
     );
 
     const senderForRetry = senderIds[3];
+    await worker.fetch(
+        await signedRequest(
+            senderForRetry,
+            "pending-retry-start",
+            "HI",
+            secret,
+            baseTimestamp + 399
+        ),
+        env
+    );
+    await worker.fetch(
+        await signedRequest(
+            senderForRetry,
+            "pending-retry-select-new",
+            "1",
+            secret,
+            baseTimestamp + 399
+        ),
+        env
+    );
     context.failedSendsRemaining = 1;
     const failedSendResponse = await worker.fetch(
         await signedRequest(
@@ -697,7 +789,7 @@ async function verifyFinalResultRecovery(context) {
         worker, senderIds, secret, baseTimestamp, env
     } = context;
     const senderForFinalResult = senderIds[5];
-    for (const [index, text] of ["HI", "500000", "9.5"].entries()) {
+    for (const [index, text] of ["HI", "1", "500000", "9.5"].entries()) {
         const response = await worker.fetch(
             await signedRequest(
                 senderForFinalResult,
@@ -722,13 +814,25 @@ async function verifyFinalResultRecovery(context) {
     const failedFinalResponse = await worker.fetch(finalMessageRequest, env);
     assert.equal(failedFinalResponse.status, 200);
     assert.equal(
-        env.DB.conversations.has(senderForFinalResult),
-        false,
-        "The completed calculation should clear the conversation."
+        env.DB.conversations.get(senderForFinalResult)?.state,
+        "WAITING_FOR_NEW_LOAN_RESULT",
+        "The completed calculation should offer post-result choices."
     );
     assert.equal(
         env.DB.outbound.get("final-tenure").message_text.includes("Monthly EMI"),
         true
+    );
+    assert.match(
+        env.DB.outbound.get("final-tenure").message_text,
+        /1\. Calculate another new loan/
+    );
+    assert.match(
+        env.DB.outbound.get("final-tenure").message_text,
+        /2\. Analyse an existing loan/
+    );
+    assert.match(
+        env.DB.outbound.get("final-tenure").message_text,
+        /3\. Main menu/
     );
     assert.equal(
         env.DB.inbox.get("final-tenure").status,
@@ -747,8 +851,8 @@ async function verifyFinalResultRecovery(context) {
     );
     assert.equal(finalDuplicateResponse.status, 200);
     assert.equal(
-        env.DB.conversations.has(senderForFinalResult),
-        false,
+        env.DB.conversations.get(senderForFinalResult)?.state,
+        "WAITING_FOR_NEW_LOAN_RESULT",
         "Retrying a pending result must not recreate or advance the conversation."
     );
 
@@ -762,7 +866,10 @@ async function verifyFinalResultRecovery(context) {
     await finalRetryTask;
     assert.equal(env.DB.outbound.get("final-tenure").status, "sent");
     assert.equal(env.DB.inbox.get("final-tenure").status, "completed");
-    assert.equal(env.DB.conversations.has(senderForFinalResult), false);
+    assert.equal(
+        env.DB.conversations.get(senderForFinalResult)?.state,
+        "WAITING_FOR_NEW_LOAN_RESULT"
+    );
 }
 
 async function verifyAccessControl(context) {
