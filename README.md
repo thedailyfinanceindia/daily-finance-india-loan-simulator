@@ -34,13 +34,14 @@ rate, current EMI, and remaining term:
   prepayments in one installment are combined, and the amount applied is capped
   at the remaining balance.
 
-The projections use monthly interest at the annual rate divided by 12, do not
-round values to paise during calculations, and support at most 600 installments.
-The fixed-EMI projections may run longer than the entered remaining term, up to
-that 600-installment limit; EMI-recalculation projections target the entered
-remaining term. These estimates do not account for lender-specific rounding,
-fees, rate-change timing, or other loan terms. Confirm any decision with your
-lender.
+The projections start from today's outstanding balance and use monthly interest
+at the annual rate divided by 12. Historical rates and interest already paid
+are not included. The current-loan baseline is limited to the entered remaining
+term; revised-rate, keep-EMI projections may run longer, up to 600 installments.
+EMI-recalculation projections target the entered remaining term. Values are not
+rounded to paise during calculations. These estimates do not account for
+lender-specific rounding, fees, rate-change timing, or other loan terms. Confirm
+any decision with your lender.
 
 The Cloudflare Worker keeps each Instagram sender's conversation in D1. The
 sender ID is the conversation key; the Worker also checks the configured
