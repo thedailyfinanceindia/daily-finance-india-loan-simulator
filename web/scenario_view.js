@@ -42,7 +42,8 @@ export function createProjectionCard(
     title,
     projection,
     additionalMetrics = [],
-    labels = {}
+    labels = {},
+    warning = ""
 ) {
     const card = document.createElement("article");
     card.className = "scenario-card";
@@ -107,6 +108,14 @@ export function createProjectionCard(
 
     for (const [label, value] of additionalMetrics) {
         addMetric(card, label, value);
+    }
+
+    if (warning) {
+        const message = document.createElement("p");
+        message.className = "scenario-warning";
+        message.setAttribute("role", "status");
+        message.textContent = warning;
+        card.append(message);
     }
 
     return card;
