@@ -163,6 +163,7 @@ jobs:
           test -f cloudflare/migrations/0002_processed_messages.sql
           test -f cloudflare/migrations/0003_webhook_reliability.sql
           test -f cloudflare/migrations/0004_terminal_webhook_failures.sql
+          test -f cloudflare/migrations/0005_conversation_state_data.sql
 
       - name: Apply staging D1 migrations
         uses: cloudflare/wrangler-action@v4

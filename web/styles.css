@@ -251,17 +251,16 @@ button:disabled {
 
 .scenario-results {
     display: grid;
-    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 14px;
     margin-top: 18px;
     max-width: 100%;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    scroll-snap-type: x mandatory;
+    align-items: stretch;
 }
 
 .scenario-card {
     min-width: 0;
+    overflow-wrap: anywhere;
     padding: 16px;
     border: 1px solid #dce7e3;
     border-radius: 10px;
@@ -280,27 +279,45 @@ button:disabled {
 }
 
 .scenario-metric {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
     padding: 8px 0;
     border-top: 1px solid #e2e7ef;
     font-size: 12px;
 }
 
 .scenario-metric span {
+    min-width: 0;
     color: #536477;
+    overflow-wrap: anywhere;
 }
 
 .scenario-metric strong {
-    text-align: right;
-    white-space: nowrap;
+    min-width: 0;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
     font-variant-numeric: tabular-nums;
+}
+
+.scenario-warning {
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    border-left: 3px solid #d5a33c;
+    border-radius: 4px;
+    background: #fffaf0;
+    color: #67552e;
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
 }
 
 .error {
     color: #b42318;
     font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
 }
 
 .disclaimer {
@@ -322,6 +339,20 @@ button:disabled {
 
 [hidden] {
     display: none !important;
+}
+
+@media (min-width: 651px) and (max-width: 900px) {
+    .scenario-results {
+        grid-template-columns: repeat(3, minmax(240px, 1fr));
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        scroll-snap-type: x mandatory;
+        padding-bottom: 8px;
+    }
+
+    .scenario-card {
+        scroll-snap-align: start;
+    }
 }
 
 @media (max-width: 650px) {
@@ -346,15 +377,7 @@ button:disabled {
     }
 
     .scenario-results {
-        grid-auto-flow: column;
-        grid-auto-columns: minmax(280px, 86%);
-        grid-template-columns: none;
-        padding-bottom: 8px;
-    }
-
-    .scenario-card {
-        scroll-snap-align: start;
-        min-width: 280px;
+        grid-template-columns: minmax(0, 1fr);
     }
 }
 

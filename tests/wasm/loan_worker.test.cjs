@@ -20,6 +20,11 @@ async function main() {
 
     assert.equal(typeof exports.dfi_calculate_loan, "function");
     assert.equal(typeof exports.dfi_get_result_ptr, "function");
+    assert.equal(typeof exports.dfi_simulate_rate_revision, "function");
+    assert.equal(typeof exports.dfi_get_rate_result_ptr, "function");
+    assert.equal(typeof exports.dfi_simulate_prepayments, "function");
+    assert.equal(typeof exports.dfi_get_prepayment_result_ptr, "function");
+    assert.equal(typeof exports.dfi_set_prepayment_event, "function");
     assert.ok(exports.memory instanceof WebAssembly.Memory);
 
     function calculate(principal, rate, months) {
@@ -63,6 +68,38 @@ async function main() {
         exports.dfi_calculate_loan(500000, 9.5, 0),
         1
     );
+
+    const rateStatus = exports.dfi_simulate_rate_revision(
+        1000000, 10, 21247.044711268275, 60, 12
+    );
+    assert.equal(rateStatus, 0);
+    const rateValues = Array.from(
+        new Float64Array(
+            exports.memory.buffer,
+            exports.dfi_get_rate_result_ptr(),
+            19
+        )
+    );
+    assert.equal(rateValues[1], 60);
+    assert.equal(rateValues[6], 64);
+    assert.equal(rateValues[11], 60);
+    assert.equal(rateValues[15], 4);
+
+    exports.dfi_set_prepayment_event(0, 12, 100000);
+    exports.dfi_set_prepayment_event(1, 24, 50000);
+    const prepaymentStatus = exports.dfi_simulate_prepayments(
+        1000000, 10, 21247.044711268275, 60, 2
+    );
+    assert.equal(prepaymentStatus, 0);
+    const prepaymentValues = Array.from(
+        new Float64Array(
+            exports.memory.buffer,
+            exports.dfi_get_prepayment_result_ptr(),
+            19
+        )
+    );
+    assert.equal(prepaymentValues[6], 51);
+    assert.equal(prepaymentValues[11], 60);
 
     console.log("Worker Wasm tests passed.");
     console.log("Normal loan:", normal);

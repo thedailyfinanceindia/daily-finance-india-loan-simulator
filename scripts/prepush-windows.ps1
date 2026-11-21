@@ -169,6 +169,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 New-Item -ItemType Directory -Force build-wasm\worker | Out-Null
+Copy-Item build-wasm\worker\loan_worker.wasm cloudflare\worker\loan_worker.wasm -Force
 Write-Host "Bundling Worker for the local concurrency simulation..."
 & npx esbuild cloudflare\worker\index.js --bundle --platform=node `
     --format=esm --target=node20 --loader:.wasm=binary `

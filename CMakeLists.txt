@@ -130,7 +130,7 @@ if(EMSCRIPTEN)
         "-sFILESYSTEM=0"
         "-sINITIAL_MEMORY=16777216"
         "-sALLOW_MEMORY_GROWTH=0"
-        "-sEXPORTED_FUNCTIONS=['_dfi_calculate_loan','_dfi_get_result_ptr']"
+        "-sEXPORTED_FUNCTIONS=['_dfi_calculate_loan','_dfi_get_result_ptr','_dfi_simulate_rate_revision','_dfi_get_rate_result_ptr','_dfi_simulate_prepayments','_dfi_get_prepayment_result_ptr','_dfi_set_prepayment_event']"
         "-Wl,--no-entry"
     )
 

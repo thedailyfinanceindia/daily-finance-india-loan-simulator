@@ -130,16 +130,19 @@ async function main() {
 
         await page.locator("#outstanding-balance").fill("3500000");
         await page.locator("#current-interest-rate").fill("8.5");
-        await page.locator("#current-emi").fill("45000");
-        await page.locator("#remaining-tenure").fill("240");
+        await page.locator("#current-emi").fill("39829.13");
+        await page.locator("#remaining-tenure").fill("140");
         await page.locator("#revised-interest-rate").fill("8.5");
         await page.locator("#simulate-rate-button").click();
-        const screenshotBaseline = await page.locator(
+        const consistencyBaseline = await page.locator(
             "#rate-results .scenario-card"
         ).first().innerText();
-        assert.match(screenshotBaseline, /Projected payoff tenure\s+114 months/);
-        assert.match(screenshotBaseline, /Contractual remaining tenure\s+240 months/);
-        assert.match(screenshotBaseline, /Calculated payoff is 114 months/);
+        assert.match(consistencyBaseline, /Projected payoff tenure\s+138 months/);
+        assert.match(consistencyBaseline, /Contractual remaining tenure\s+140 months/);
+        assert.equal(
+            await page.locator("#rate-results .scenario-warning").innerText(),
+            "Your current EMI is projected to repay the outstanding balance in 138 months, compared with the stated remaining tenure of 140 months."
+        );
 
         await page.locator("#outstanding-balance").fill("1000000");
         await page.locator("#current-interest-rate").fill("10");
@@ -247,15 +250,73 @@ async function main() {
 
         assert.match(error, /between 0 and 100/);
 
-        await page.setViewportSize({ width: 390, height: 844 });
-        const mobileLayout = await page.evaluate(() => ({
+        await page.locator("#outstanding-balance").fill("3500000");
+        await page.locator("#current-interest-rate").fill("8.5");
+        await page.locator("#current-emi").fill("39829.13");
+        await page.locator("#remaining-tenure").fill("140");
+        await page.locator("#revised-interest-rate").fill("8.5");
+        await page.locator("#simulate-rate-button").click();
+
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.evaluate(() => {
+            const firstCard = document.querySelector("#rate-results .scenario-card");
+            firstCard.querySelector(".scenario-metric span").textContent =
+                "A deliberately long metric label that should wrap without overlapping its value";
+            firstCard.querySelector(".scenario-metric strong").textContent =
+                `₹${"9".repeat(34)}`;
+            document.querySelector("#simulation-error").textContent =
+                "A deliberately long validation message that must wrap within its available width without overlapping the neighboring comparison card.";
+        });
+        const desktopLayout = await page.evaluate(() => {
+            const results = document.querySelector("#rate-results");
+            const firstCard = results.querySelector(".scenario-card");
+            const longMetric = firstCard.querySelector(".scenario-metric");
+            const longLabel = longMetric.querySelector("span");
+            const longValue = longMetric.querySelector("strong");
+            const warning = firstCard.querySelector(".scenario-warning");
+            return {
+                documentFits: document.documentElement.scrollWidth <= window.innerWidth,
+                allCardsWithinResults: Array.from(results.children).every(card => {
+                    const cardRect = card.getBoundingClientRect();
+                    const resultsRect = results.getBoundingClientRect();
+                    return cardRect.left >= resultsRect.left &&
+                        cardRect.right <= resultsRect.right;
+                }),
+                longTextFits: [longLabel, longValue, warning].every(element =>
+                    element.scrollWidth <= element.clientWidth
+                )
+            };
+        });
+        assert.equal(desktopLayout.documentFits, true);
+        assert.equal(desktopLayout.allCardsWithinResults, true);
+        assert.equal(desktopLayout.longTextFits, true);
+
+        await page.setViewportSize({ width: 768, height: 1024 });
+        const tabletLayout = await page.evaluate(() => ({
             documentFits: document.documentElement.scrollWidth <= window.innerWidth,
-            numericalWhiteSpace: Array.from(
-                document.querySelectorAll(".scenario-metric strong")
-            ).every(element => getComputedStyle(element).whiteSpace === "nowrap")
+            resultsScrolls: document.querySelector("#rate-results").scrollWidth >
+                document.querySelector("#rate-results").clientWidth
         }));
+        assert.equal(tabletLayout.documentFits, true);
+        assert.equal(tabletLayout.resultsScrolls, true);
+
+        await page.setViewportSize({ width: 390, height: 844 });
+        const mobileLayout = await page.evaluate(() => {
+            const cards = Array.from(
+                document.querySelectorAll("#rate-results .scenario-card")
+            );
+            return {
+                documentFits: document.documentElement.scrollWidth <= window.innerWidth,
+                cardsStacked: cards.every((card, index) => index === 0 ||
+                    card.getBoundingClientRect().top >
+                        cards[index - 1].getBoundingClientRect().top),
+                errorFits: document.querySelector("#simulation-error").scrollWidth <=
+                    document.querySelector("#simulation-error").clientWidth
+            };
+        });
         assert.equal(mobileLayout.documentFits, true);
-        assert.equal(mobileLayout.numericalWhiteSpace, true);
+        assert.equal(mobileLayout.cardsStacked, true);
+        assert.equal(mobileLayout.errorFits, true);
         assert.deepEqual(errors, []);
 
         console.log("PASS: Default EMI calculation");

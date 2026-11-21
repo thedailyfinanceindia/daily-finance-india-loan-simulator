@@ -43,6 +43,40 @@ rounded to paise during calculations. These estimates do not account for
 lender-specific rounding, fees, rate-change timing, or other loan terms. Confirm
 any decision with your lender.
 
+## Instagram DM journeys
+
+The Instagram bot supports two guided DM journeys:
+
+1. **New Loan EMI:** enter the loan principal, annual interest rate, and tenure.
+   The result shows monthly EMI, total interest, and total repayment.
+2. **Existing Loan Analysis:** enter the current outstanding principal, current
+   annual rate, current EMI, and remaining tenure. The bot provides:
+   - **Current Loan Position:** projected remaining tenure, future interest,
+     future repayment, and the monthly EMI from the supplied outstanding
+     balance.
+   - **Interest-Rate Revision:** compares keeping the current EMI or keeping
+     the remaining tenure, using the C++ amortization engine.
+   - **Multiple Prepayment Scenarios:** accepts repeated entries in
+     `amount, installment number` format, such as `100000, 12`, and compares
+     reducing tenure with recalculating EMI. Send `DONE` after all entries.
+
+Send `1` or `2` from the main menu. Send `MENU` to return to the main menu,
+`RESET` to restart, and `CANCEL` to stop. `HELP` shows the supported entries.
+Each Instagram sender has an independent D1-backed conversation. Individual
+prepayment amounts and the cumulative plan must be positive and cannot exceed
+the supplied outstanding balance. Installment numbers must be within the
+remaining term.
+
+All existing-loan projections start from today's outstanding balance and use
+the supplied annual rate divided by 12. They exclude historical interest and
+historical rates. Prepayments are applied after the regular EMI for the
+specified installment, matching the existing C++ amortization rules. Multiple
+prepayments at the same installment are combined, and each engine result is
+capped by the remaining balance. Results are estimates; lender-specific
+rounding, fees, rate-change timing, payment timing and contractual terms may
+change the actual outcome. Verify decisions with the lender. The bot does not
+retrieve an actual bank or loan-account balance.
+
 The Cloudflare Worker keeps each Instagram sender's conversation in D1. The
 sender ID is the conversation key; the Worker also checks the configured
 sender allow-list before processing a message. Verified webhook messages are

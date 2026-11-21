@@ -23,6 +23,7 @@ export async function getConversation(env, senderId) {
             principal,
             annual_rate,
             tenure_months,
+            state_data,
             updated_at
         FROM conversations
         WHERE sender_id = ?
@@ -40,6 +41,7 @@ export async function getConversation(env, senderId) {
             principal: row.principal,
             rate: row.annual_rate,
             tenureMonths: row.tenure_months,
+            stateData: row.state_data,
             updatedAt: row.updated_at
         },
         expired: false
@@ -111,15 +113,17 @@ function buildConversationStatements(env, senderId, outcome, lockToken) {
                 principal,
                 annual_rate,
                 tenure_months,
+                state_data,
                 updated_at
             )
-            SELECT ?, ?, ?, ?, ?, ${SQLITE_NOW_MS}
+            SELECT ?, ?, ?, ?, ?, ?, ${SQLITE_NOW_MS}
             WHERE ${ACTIVE_SENDER_LOCK_SQL}
             ON CONFLICT(sender_id) DO UPDATE SET
                 state = excluded.state,
                 principal = excluded.principal,
                 annual_rate = excluded.annual_rate,
                 tenure_months = excluded.tenure_months,
+                state_data = excluded.state_data,
                 updated_at = excluded.updated_at
         `).bind(
             senderId,
@@ -127,6 +131,7 @@ function buildConversationStatements(env, senderId, outcome, lockToken) {
             conversation.principal,
             conversation.rate,
             conversation.tenureMonths,
+            conversation.stateData || null,
             senderId,
             lockToken
         )];

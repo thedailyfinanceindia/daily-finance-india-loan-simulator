@@ -142,6 +142,7 @@ class MemoryD1 {
                     principal,
                     rate,
                     tenureMonths,
+                    stateData,
                     lockSenderId,
                     lockToken
                 ] = values;
@@ -156,6 +157,7 @@ class MemoryD1 {
                     principal,
                     annual_rate: rate,
                     tenure_months: tenureMonths,
+                    state_data: stateData,
                     updated_at: Date.now()
                 });
                 return { meta: { changes: 1 } };

@@ -251,18 +251,12 @@ function renderRateRevision(loanCalculator, rateResults) {
                 `${snapshot.annualInterestRate}%`
             ]
         ];
-        if (
+        const hasConsistencyWarning =
             simulation.baseline.status === "completed" &&
             Math.abs(
                 simulation.baseline.installments -
                 snapshot.remainingTenureMonths
-            ) > 1
-        ) {
-            baselineAdditionalMetrics.push([
-                "Input consistency warning",
-                `Calculated payoff is ${simulation.baseline.installments} months, but contractual remaining tenure is ${snapshot.remainingTenureMonths} months.`
-            ]);
-        }
+            ) > 1;
         rateResults.append(
             createProjectionCard(
                 "Current loan baseline",
@@ -271,7 +265,10 @@ function renderRateRevision(loanCalculator, rateResults) {
                 {
                     emi: "Monthly EMI",
                     installments: "Projected payoff tenure"
-                }
+                },
+                hasConsistencyWarning
+                    ? `Your current EMI is projected to repay the outstanding balance in ${simulation.baseline.installments} months, compared with the stated remaining tenure of ${snapshot.remainingTenureMonths} months.`
+                    : ""
             ),
             createProjectionCard(
                 "Revised rate, keep EMI",
@@ -310,7 +307,10 @@ function renderRateRevision(loanCalculator, rateResults) {
                     ),
                     ["Revised annual interest rate", `${revisedRate}%`]
                 ],
-                { emi: "Monthly EMI" }
+                {
+                    emi: "Monthly EMI",
+                    installments: "Projected payoff tenure"
+                }
             )
         );
         rateResults.hidden = false;

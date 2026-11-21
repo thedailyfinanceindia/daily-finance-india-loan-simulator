@@ -178,7 +178,119 @@ async function verifyConcurrentDeliveryAndOrdering(context) {
     assert.ok(resetResponses.every(response => response.status === 200));
     assert.equal(
         env.DB.conversations.get(senderIds[2]).state,
-        "WAITING_FOR_PRINCIPAL"
+        "WAITING_FOR_MAIN_MENU"
+    );
+}
+
+async function verifyExistingLoanFlows(context) {
+    const { worker, secret, baseTimestamp, env } = context;
+    const senderId = "test-sender-10";
+
+    await worker.fetch(
+        await signedRequest(
+            senderId,
+            "existing-reset",
+            "RESET",
+            secret,
+            baseTimestamp + 799
+        ),
+        env
+    );
+    const menuResponse = await worker.fetch(
+        await signedRequest(senderId, "existing-menu", "2", secret, baseTimestamp + 800),
+        env
+    );
+    assert.equal(menuResponse.status, 200);
+    assert.equal(
+        env.DB.conversations.get(senderId).state,
+        "WAITING_FOR_EXISTING_MENU"
+    );
+
+    for (const [messageId, text] of [
+        ["position-1", "1"],
+        ["position-2", "1000000"],
+        ["position-3", "10"],
+        ["position-4", "21247.044711268275"],
+        ["position-5", "60"]
+    ]) {
+        const response = await worker.fetch(
+            await signedRequest(
+                senderId,
+                messageId,
+                text,
+                secret,
+                baseTimestamp + 801 + Number(messageId.split("-")[1])
+            ),
+            env
+        );
+        assert.equal(response.status, 200);
+    }
+    assert.match(
+        env.DB.outbound.get("position-5").message_text,
+        /Current Loan Position/
+    );
+    assert.match(
+        env.DB.outbound.get("position-5").message_text,
+        /Projected Future Interest/
+    );
+
+    for (const [messageId, text] of [
+        ["rate-1", "2"],
+        ["rate-2", "1000000"],
+        ["rate-3", "10"],
+        ["rate-4", "21247.044711268275"],
+        ["rate-5", "60"],
+        ["rate-6", "12"]
+    ]) {
+        const response = await worker.fetch(
+            await signedRequest(
+                senderId,
+                messageId,
+                text,
+                secret,
+                baseTimestamp + 820 + Number(messageId.split("-")[1])
+            ),
+            env
+        );
+        assert.equal(response.status, 200);
+    }
+    assert.match(
+        env.DB.outbound.get("rate-6").message_text,
+        /Scenario A - Keep EMI unchanged/
+    );
+    assert.match(
+        env.DB.outbound.get("rate-6").message_text,
+        /Scenario B - Keep remaining tenure unchanged/
+    );
+
+    for (const [messageId, text] of [
+        ["prepay-1", "3"],
+        ["prepay-2", "1000000"],
+        ["prepay-3", "10"],
+        ["prepay-4", "21247.044711268275"],
+        ["prepay-5", "60"],
+        ["prepay-6", "100000, 12"],
+        ["prepay-7", "DONE"]
+    ]) {
+        const response = await worker.fetch(
+            await signedRequest(
+                senderId,
+                messageId,
+                text,
+                secret,
+                baseTimestamp + 840 + Number(messageId.split("-")[1])
+            ),
+            env
+        );
+        assert.equal(response.status, 200);
+    }
+    assert.match(
+        env.DB.outbound.get("prepay-7").message_text,
+        /Strategy A - Reduce tenure/
+    );
+    assert.match(
+        env.DB.outbound.get("prepay-7").message_text,
+        /Strategy B - Reduce EMI/
     );
 }
 
@@ -244,7 +356,7 @@ async function verifyLeaseFencing(context) {
     assert.equal((await staleWorkerPromise).status, 200);
     assert.equal(
         env.DB.conversations.get(senderForFencing).state,
-        "WAITING_FOR_PRINCIPAL",
+        "WAITING_FOR_MAIN_MENU",
         "A stale lease owner must not overwrite the takeover's RESET."
     );
     assert.equal(
@@ -410,7 +522,7 @@ async function verifyTerminalDeliveryFailures(context) {
     );
     assert.equal(
         env.DB.conversations.get(senderForPermanentFailure).state,
-        "WAITING_FOR_PRINCIPAL"
+        "WAITING_FOR_MAIN_MENU"
     );
 
     const senderForRetryExhaustion = senderIds[8];
@@ -735,6 +847,7 @@ async function main() {
 
     try {
         await verifyConcurrentDeliveryAndOrdering(context);
+        await verifyExistingLoanFlows(context);
         await verifyLeaseFencing(context);
         await verifyTerminalDeliveryFailures(context);
         await verifyPendingReplyRecovery(context);
