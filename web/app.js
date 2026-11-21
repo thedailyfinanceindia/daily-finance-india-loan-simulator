@@ -1,26 +1,22 @@
+import { formatINR } from "./scenario_view.js";
+import { initializeScenarioPlanner } from "./scenario_planner.js";
 
 const form = document.getElementById("loan-form");
 const calculateButton = document.getElementById("calculate-button");
 const errorMessage = document.getElementById("error-message");
 const results = document.getElementById("results");
-
-const formatINR = (value) =>
-    new Intl.NumberFormat("en-IN", {
-        style: "currency",
-        currency: "INR",
-        maximumFractionDigits: 0
-    }).format(value);
-
+const enableScenarioPlanner = initializeScenarioPlanner();
 let loanCalculator = null;
 
 async function initializeCalculator() {
     try {
-        if (typeof createLoanCalculator !== "function") {
+        if (typeof globalThis.createLoanCalculator !== "function") {
             throw new Error("WebAssembly loader was not found.");
         }
 
-        loanCalculator = await createLoanCalculator();
+        loanCalculator = await globalThis.createLoanCalculator();
         calculateButton.disabled = false;
+        enableScenarioPlanner(loanCalculator);
     } catch (error) {
         console.error("WebAssembly initialization failed:", error);
         errorMessage.textContent =
@@ -32,7 +28,7 @@ async function initializeCalculator() {
 calculateButton.disabled = true;
 initializeCalculator();
 
-form.addEventListener("submit", (event) => {
+form.addEventListener("submit", event => {
     event.preventDefault();
 
     errorMessage.textContent = "";
@@ -47,7 +43,11 @@ form.addEventListener("submit", (event) => {
     const annualRate = Number(document.getElementById("interest-rate").value);
     const tenureYears = Number(document.getElementById("tenure").value);
 
-    if (!Number.isFinite(principal) || principal <= 0 || principal > 1_000_000_000) {
+    if (
+        !Number.isFinite(principal) ||
+        principal <= 0 ||
+        principal > 1_000_000_000
+    ) {
         errorMessage.textContent = "Enter a valid loan amount.";
         return;
     }
@@ -65,25 +65,19 @@ form.addEventListener("submit", (event) => {
     const tenureMonths = tenureYears * 12;
 
     try {
-        // Financial calculation is performed by the C++ WebAssembly engine.
         const result = loanCalculator.calculateLoan(
             principal,
             annualRate,
             tenureMonths
         );
-
         document.getElementById("monthly-emi").textContent =
             formatINR(result.monthlyEmi);
-
         document.getElementById("principal-result").textContent =
             formatINR(principal);
-
         document.getElementById("interest-result").textContent =
             formatINR(result.totalInterest);
-
         document.getElementById("repayment-result").textContent =
             formatINR(result.totalRepayment);
-
         results.hidden = false;
     } catch (error) {
         console.error("Loan calculation failed:", error);

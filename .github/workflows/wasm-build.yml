@@ -47,6 +47,8 @@ jobs:
           test -f build-wasm/web/index.html
           test -f build-wasm/web/styles.css
           test -f build-wasm/web/app.js
+          test -f build-wasm/web/scenario_planner.js
+          test -f build-wasm/web/scenario_view.js
           test -f build-wasm/web/loan_calculator.js
           test -f build-wasm/web/loan_calculator.wasm
           test -f build-wasm/worker/loan_worker.wasm
@@ -150,8 +152,14 @@ jobs:
         run: |
           test -f cloudflare/wrangler.toml
           test -f cloudflare/worker/index.js
+          test -f cloudflare/worker/conversation.mjs
+          test -f cloudflare/worker/d1_store.mjs
           test -f cloudflare/worker/input_parser.mjs
+          test -f cloudflare/worker/instagram_client.mjs
           test -f cloudflare/worker/loan_worker.wasm
+          test -f cloudflare/worker/loan_engine.mjs
+          test -f cloudflare/worker/message_processor.mjs
+          test -f cloudflare/worker/webhook_protocol.mjs
           test -f cloudflare/migrations/0002_processed_messages.sql
           test -f cloudflare/migrations/0003_webhook_reliability.sql
           test -f cloudflare/migrations/0004_terminal_webhook_failures.sql

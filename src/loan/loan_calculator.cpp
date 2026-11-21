@@ -9,11 +9,18 @@ LoanResult LoanCalculator::calculate(const LoanInput& input)
     if (!std::isfinite(input.principal) || input.principal <= 0.0L)
         throw std::invalid_argument("Principal must be positive and finite.");
 
-    if (!std::isfinite(input.annualInterestRate) || input.annualInterestRate < 0.0L)
-        throw std::invalid_argument("Interest rate must be non-negative and finite.");
+    if (!std::isfinite(input.annualInterestRate) ||
+        input.annualInterestRate < 0.0L ||
+        input.annualInterestRate > MAX_ANNUAL_INTEREST_RATE) {
+        throw std::invalid_argument(
+            "Interest rate must be between 0 and 100 percent."
+        );
+    }
 
-    if (input.tenureMonths == 0 || input.tenureMonths > 600)
+    if (input.tenureMonths == 0 ||
+        input.tenureMonths > MAX_TENURE_MONTHS) {
         throw std::invalid_argument("Tenure must be between 1 and 600 months.");
+    }
 
     const long double months = static_cast<long double>(input.tenureMonths);
     const long double monthlyRate = input.annualInterestRate / 1200.0L;

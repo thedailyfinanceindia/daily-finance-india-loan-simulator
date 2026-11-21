@@ -45,6 +45,11 @@ int main()
     check(rejected, "Reject negative interest rate");
 
     rejected = false;
+    try { LoanCalculator::calculate({100000.0L, 100.1L, 120}); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    check(rejected, "Reject interest rates above 100 percent");
+
+    rejected = false;
     try { LoanCalculator::calculate({100000.0L, 8.0L, 0}); }
     catch (const std::invalid_argument&) { rejected = true; }
     check(rejected, "Reject zero tenure");

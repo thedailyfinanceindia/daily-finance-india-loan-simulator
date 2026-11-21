@@ -9,6 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(dfi_loan_engine
     src/loan/loan_calculator.cpp
     src/loan/loan_comparison.cpp
+    src/loan/amortization_simulator.cpp
 )
 
 target_include_directories(dfi_loan_engine PUBLIC include)
@@ -49,6 +50,17 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     add_test(
         NAME LoanComparisonTests
         COMMAND dfi_comparison_tests
+    )
+
+    add_executable(dfi_amortization_tests
+        tests/amortization_simulator_tests.cpp
+    )
+
+    target_link_libraries(dfi_amortization_tests PRIVATE dfi_loan_engine)
+
+    add_test(
+        NAME LoanAmortizationTests
+        COMMAND dfi_amortization_tests
     )
 endif()
 
